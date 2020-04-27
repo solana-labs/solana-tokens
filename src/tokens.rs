@@ -1,4 +1,4 @@
-use crate::args::{BalancesArgs, DistributeArgs};
+use crate::args::{BalancesArgs, DistributeArgs, DistributeStakeArgs};
 use crate::thin_client::{Client, ThinClient};
 use console::style;
 use csv::{ReaderBuilder, Trim};
@@ -10,6 +10,7 @@ use solana_sdk::{
     signature::{Signature, Signer},
     system_instruction,
 };
+use solana_stake_program::{stake_instruction, stake_state::StakeAuthorize};
 use std::fs;
 use std::path::Path;
 use std::process;
@@ -20,7 +21,7 @@ struct Bid {
     primary_address: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct Allocation {
     recipient: String,
     amount: f64,
@@ -31,6 +32,7 @@ struct TransactionInfo {
     recipient: String,
     amount: f64,
     signature: String,
+    new_stake_account_address: String,
 }
 
 fn merge_allocations(allocations: &[Allocation]) -> Vec<Allocation> {
@@ -108,7 +110,89 @@ fn distribute_tokens<T: Client>(
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
                 if !args.dry_run {
-                    append_transaction_info(&allocation, &signature, &args.transactions_csv)?;
+                    append_transaction_info(&allocation, &signature, None, &args.transactions_csv)?;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error sending tokens to {}: {}", allocation.recipient, e);
+            }
+        };
+    }
+    Ok(())
+}
+
+fn distribute_stake<T: Client>(
+    client: &ThinClient<T>,
+    allocations: &[Allocation],
+    args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
+) -> Result<(), csv::Error> {
+    let new_stake_account_keypair = Keypair::new();
+    let new_stake_account_address = new_stake_account_keypair.pubkey();
+    let signers = if args.dry_run {
+        vec![]
+    } else {
+        vec![
+            &**args.fee_payer.as_ref().unwrap(),
+            &**args.stake_authority.as_ref().unwrap(),
+            &**args.withdraw_authority.as_ref().unwrap(),
+            &new_stake_account_keypair,
+        ]
+    };
+
+    for allocation in allocations {
+        println!("{:<44}  {:>24.9}", allocation.recipient, allocation.amount);
+        let result = if args.dry_run {
+            Ok(Signature::default())
+        } else {
+            let system_sol = 1.0;
+            let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
+            let stake_authority = args.stake_authority.as_ref().unwrap().pubkey();
+            let withdraw_authority = args.stake_authority.as_ref().unwrap().pubkey();
+
+            let mut instructions = stake_instruction::split(
+                &args.stake_account_address,
+                &stake_authority,
+                sol_to_lamports(allocation.amount - system_sol),
+                &new_stake_account_address,
+            );
+
+            let recipient = allocation.recipient.parse().unwrap();
+
+            // Make the recipient the new stake authority
+            instructions.push(stake_instruction::authorize(
+                &new_stake_account_address,
+                &stake_authority,
+                &recipient,
+                StakeAuthorize::Staker,
+            ));
+
+            // Make the recipient the new withdraw authority
+            instructions.push(stake_instruction::authorize(
+                &new_stake_account_address,
+                &withdraw_authority,
+                &recipient,
+                StakeAuthorize::Withdrawer,
+            ));
+
+            instructions.push(system_instruction::transfer(
+                &fee_payer_pubkey, // Should this be a sender keypair?
+                &recipient,
+                sol_to_lamports(system_sol),
+            ));
+
+            let message = Message::new_with_payer(&instructions, Some(&fee_payer_pubkey));
+            client.send_message(message, &signers)
+        };
+        match result {
+            Ok(signature) => {
+                println!("Finalized transaction with signature {}", signature);
+                if !args.dry_run {
+                    append_transaction_info(
+                        &allocation,
+                        &signature,
+                        Some(&new_stake_account_address),
+                        &args.transactions_csv,
+                    )?;
                 }
             }
             Err(e) => {
@@ -130,6 +214,7 @@ fn read_transaction_infos(path: &str) -> Vec<TransactionInfo> {
 fn append_transaction_info(
     allocation: &Allocation,
     signature: &Signature,
+    new_stake_account_address: Option<&Pubkey>,
     transactions_csv: &str,
 ) -> Result<(), csv::Error> {
     let existed = Path::new(&transactions_csv).exists();
@@ -146,66 +231,34 @@ fn append_transaction_info(
         recipient: allocation.recipient.clone(),
         amount: allocation.amount,
         signature: signature.to_string(),
+        new_stake_account_address: new_stake_account_address
+            .map(|pubkey| pubkey.to_string())
+            .unwrap_or("".to_string()),
     };
     wtr.serialize(transaction_info)?;
     wtr.flush()?;
     Ok(())
 }
 
-pub fn process_distribute<T: Client>(
+fn apply_transaction_infos<T: Client>(
     client: &ThinClient<T>,
-    args: &DistributeArgs<Box<dyn Signer>>,
-) -> Result<(), csv::Error> {
-    let mut rdr = ReaderBuilder::new()
-        .trim(Trim::All)
-        .from_path(&args.bids_csv)?;
-    let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
-    let allocations: Vec<Allocation> = bids
-        .into_iter()
-        .map(|bid| create_allocation(&bid, args.dollars_per_sol))
-        .collect();
-
-    let transaction_infos: Vec<TransactionInfo> = if Path::new(&args.transactions_csv).exists() {
-        read_transaction_infos(&args.transactions_csv)
+    allocations: &[Allocation],
+    transactions_csv: &str,
+) -> Result<(f64, Vec<Allocation>), csv::Error> {
+    let transaction_infos: Vec<TransactionInfo> = if Path::new(transactions_csv).exists() {
+        read_transaction_infos(transactions_csv)
     } else {
         vec![]
     };
-
-    let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
-    println!(
-        "{} ◎{} (${})",
-        style(format!("{}", "Total in allocations_csv:")).bold(),
-        starting_total_tokens,
-        starting_total_tokens * args.dollars_per_sol,
-    );
 
     let mut allocations = merge_allocations(&allocations);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
     let distributed_tokens: f64 = transaction_infos.iter().map(|x| x.amount).sum();
-    let undistributed_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
-    println!(
-        "{} ◎{} (${})",
-        style(format!("{}", "Distributed:")).bold(),
-        distributed_tokens,
-        distributed_tokens * args.dollars_per_sol,
-    );
-    println!(
-        "{} ◎{} (${})",
-        style(format!("{}", "Undistributed:")).bold(),
-        undistributed_tokens,
-        undistributed_tokens * args.dollars_per_sol,
-    );
-    println!(
-        "{} ◎{} (${})\n",
-        style(format!("{}", "Total:")).bold(),
-        distributed_tokens + undistributed_tokens,
-        (distributed_tokens + undistributed_tokens) * args.dollars_per_sol,
-    );
 
     if allocations.is_empty() {
         eprintln!("No work to do");
-        return Ok(());
+        return Ok((distributed_tokens, allocations));
     }
 
     // Sanity check: the recipient should not have tokens yet. If they do, it
@@ -237,8 +290,73 @@ pub fn process_distribute<T: Client>(
         ))
         .bold()
     );
+    Ok((distributed_tokens, allocations))
+}
 
-    distribute_tokens(&client, &allocations, &args)?;
+pub fn process_distribute<T: Client>(
+    client: &ThinClient<T>,
+    args: &DistributeArgs<Box<dyn Signer>>,
+) -> Result<(), csv::Error> {
+    let mut rdr = ReaderBuilder::new()
+        .trim(Trim::All)
+        .from_path(&args.bids_csv)?;
+    let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
+    let allocations: Vec<Allocation> = bids
+        .into_iter()
+        .map(|bid| create_allocation(&bid, args.dollars_per_sol))
+        .collect();
+
+    let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
+    println!(
+        "{} ◎{} (${})",
+        style(format!("{}", "Total in allocations_csv:")).bold(),
+        starting_total_tokens,
+        starting_total_tokens * args.dollars_per_sol,
+    );
+
+    let (distributed_tokens, allocations) =
+        apply_transaction_infos(client, &allocations, &args.transactions_csv)?;
+
+    let undistributed_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
+    println!(
+        "{} ◎{} (${})",
+        style(format!("{}", "Distributed:")).bold(),
+        distributed_tokens,
+        distributed_tokens * args.dollars_per_sol,
+    );
+    println!(
+        "{} ◎{} (${})",
+        style(format!("{}", "Undistributed:")).bold(),
+        undistributed_tokens,
+        undistributed_tokens * args.dollars_per_sol,
+    );
+    println!(
+        "{} ◎{} (${})\n",
+        style(format!("{}", "Total:")).bold(),
+        distributed_tokens + undistributed_tokens,
+        (distributed_tokens + undistributed_tokens) * args.dollars_per_sol,
+    );
+
+    distribute_tokens(client, &allocations, args)?;
+
+    Ok(())
+}
+
+pub fn process_distribute_stake<T: Client>(
+    client: &ThinClient<T>,
+    args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
+) -> Result<(), csv::Error> {
+    let mut rdr = ReaderBuilder::new()
+        .trim(Trim::All)
+        .from_path(&args.allocations_csv)?;
+    let allocations: Vec<Allocation> = rdr
+        .deserialize()
+        .map(|allocation| allocation.unwrap())
+        .collect();
+
+    let (_distributed_tokens, _allocations) =
+        apply_transaction_infos(client, &allocations, &args.transactions_csv)?;
+    distribute_stake(client, &allocations, args)?;
 
     Ok(())
 }
@@ -374,6 +492,7 @@ mod tests {
             recipient: "b".to_string(),
             amount: 1.0,
             signature: "".to_string(),
+            new_stake_account_address: "".to_string(),
         }];
         apply_previous_transactions(&mut allocations, &transaction_infos);
         assert_eq!(allocations.len(), 1);

@@ -20,6 +20,7 @@ solana-client = "1.1.7"
 solana-remote-wallet = "1.1.7"
 solana-runtime = "1.1.7"
 solana-sdk = "1.1.7"
+solana-stake-program = "1.1.7"
 tempfile = "3.1.0"
 
 [dev-dependencies]

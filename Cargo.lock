@@ -3410,6 +3410,7 @@ dependencies = [
  "solana-remote-wallet",
  "solana-runtime",
  "solana-sdk",
+ "solana-stake-program",
  "tempfile",
 ]
 
