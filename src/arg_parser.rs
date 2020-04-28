@@ -92,6 +92,7 @@ where
                 )
                 .arg(
                     Arg::with_name("allocations_csv")
+                        .long("allocations-csv")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
@@ -113,7 +114,6 @@ where
                 )
                 .arg(
                     Arg::with_name("stake_authority")
-                        .required(true)
                         .long("stake-authority")
                         .takes_value(true)
                         .value_name("KEYPAIR")
@@ -122,7 +122,6 @@ where
                 )
                 .arg(
                     Arg::with_name("withdraw_authority")
-                        .required(true)
                         .long("withdraw-authority")
                         .takes_value(true)
                         .value_name("KEYPAIR")
