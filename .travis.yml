@@ -1,3 +1,7 @@
 language: rust
-before_install:
-  - sudo apt-get -y install pkg-config libudev-dev
+addons:
+  apt:
+    packages:
+    - pkg-config
+    - libudev-dev
+    update: true
