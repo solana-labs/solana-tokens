@@ -10,7 +10,10 @@ use solana_sdk::{
     signature::{Signature, Signer},
     system_instruction,
 };
-use solana_stake_program::{stake_instruction, stake_state::StakeAuthorize};
+use solana_stake_program::{
+    stake_instruction,
+    stake_state::{Authorized, Lockup, StakeAuthorize},
+};
 use std::fs;
 use std::path::Path;
 use std::process;
@@ -147,7 +150,7 @@ fn distribute_stake<T: Client>(
             let system_sol = 1.0;
             let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
             let stake_authority = args.stake_authority.as_ref().unwrap().pubkey();
-            let withdraw_authority = args.stake_authority.as_ref().unwrap().pubkey();
+            let withdraw_authority = args.withdraw_authority.as_ref().unwrap().pubkey();
 
             let mut instructions = stake_instruction::split(
                 &args.stake_account_address,
@@ -240,25 +243,38 @@ fn append_transaction_info(
     Ok(())
 }
 
-fn apply_transaction_infos<T: Client>(
+pub fn process_distribute<T: Client>(
     client: &ThinClient<T>,
-    allocations: &[Allocation],
-    transactions_csv: &str,
-) -> Result<(f64, Vec<Allocation>), csv::Error> {
-    let transaction_infos: Vec<TransactionInfo> = if Path::new(transactions_csv).exists() {
-        read_transaction_infos(transactions_csv)
+    args: &DistributeArgs<Box<dyn Signer>>,
+) -> Result<(), csv::Error> {
+    let mut rdr = ReaderBuilder::new()
+        .trim(Trim::All)
+        .from_path(&args.bids_csv)?;
+    let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
+    let mut allocations: Vec<Allocation> = bids
+        .into_iter()
+        .map(|bid| create_allocation(&bid, args.dollars_per_sol))
+        .collect();
+
+    let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
+    println!(
+        "{} ◎{} (${})",
+        style(format!("{}", "Total in allocations_csv:")).bold(),
+        starting_total_tokens,
+        starting_total_tokens * args.dollars_per_sol,
+    );
+
+    let transaction_infos = if Path::new(&args.transactions_csv).exists() {
+        read_transaction_infos(&args.transactions_csv)
     } else {
         vec![]
     };
 
-    let mut allocations = merge_allocations(&allocations);
     apply_previous_transactions(&mut allocations, &transaction_infos);
-
-    let distributed_tokens: f64 = transaction_infos.iter().map(|x| x.amount).sum();
 
     if allocations.is_empty() {
         eprintln!("No work to do");
-        return Ok((distributed_tokens, allocations));
+        return Ok(());
     }
 
     // Sanity check: the recipient should not have tokens yet. If they do, it
@@ -290,33 +306,8 @@ fn apply_transaction_infos<T: Client>(
         ))
         .bold()
     );
-    Ok((distributed_tokens, allocations))
-}
 
-pub fn process_distribute<T: Client>(
-    client: &ThinClient<T>,
-    args: &DistributeArgs<Box<dyn Signer>>,
-) -> Result<(), csv::Error> {
-    let mut rdr = ReaderBuilder::new()
-        .trim(Trim::All)
-        .from_path(&args.bids_csv)?;
-    let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
-    let allocations: Vec<Allocation> = bids
-        .into_iter()
-        .map(|bid| create_allocation(&bid, args.dollars_per_sol))
-        .collect();
-
-    let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
-    println!(
-        "{} ◎{} (${})",
-        style(format!("{}", "Total in allocations_csv:")).bold(),
-        starting_total_tokens,
-        starting_total_tokens * args.dollars_per_sol,
-    );
-
-    let (distributed_tokens, allocations) =
-        apply_transaction_infos(client, &allocations, &args.transactions_csv)?;
-
+    let distributed_tokens: f64 = transaction_infos.iter().map(|x| x.amount).sum();
     let undistributed_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
     println!(
         "{} ◎{} (${})",
@@ -354,8 +345,20 @@ pub fn process_distribute_stake<T: Client>(
         .map(|allocation| allocation.unwrap())
         .collect();
 
-    let (_distributed_tokens, _allocations) =
-        apply_transaction_infos(client, &allocations, &args.transactions_csv)?;
+    let transaction_infos = if Path::new(&args.transactions_csv).exists() {
+        read_transaction_infos(&args.transactions_csv)
+    } else {
+        vec![]
+    };
+
+    let mut allocations = merge_allocations(&allocations);
+    apply_previous_transactions(&mut allocations, &transaction_infos);
+
+    if allocations.is_empty() {
+        eprintln!("No work to do");
+        return Ok(());
+    }
+
     distribute_stake(client, &allocations, args)?;
 
     Ok(())
@@ -462,6 +465,101 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
     );
 }
 
+pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_keypair: Keypair) {
+    let thin_client = ThinClient(client);
+    let fee_payer = Keypair::new();
+    thin_client
+        .transfer(sol_to_lamports(1.0), &sender_keypair, &fee_payer.pubkey())
+        .unwrap();
+
+    // TODO: Create a stake account with lockups
+    let stake_account_keypair = Keypair::new();
+    let stake_account_address = stake_account_keypair.pubkey();
+    let stake_authority = Keypair::new();
+    let withdraw_authority = Keypair::new();
+
+    let authorized = Authorized {
+        staker: stake_authority.pubkey(),
+        withdrawer: withdraw_authority.pubkey(),
+    };
+    let lockup = Lockup::default();
+    let instructions = stake_instruction::create_account(
+        &sender_keypair.pubkey(),
+        &stake_account_address,
+        &authorized,
+        &lockup,
+        sol_to_lamports(3000.0),
+    );
+    let message = Message::new(&instructions);
+    let signers = [&sender_keypair, &stake_account_keypair];
+    thin_client.send_message(message, &signers).unwrap();
+
+    let alice_pubkey = Pubkey::new_rand();
+    let allocation = Allocation {
+        recipient: alice_pubkey.to_string(),
+        amount: 1000.0,
+    };
+    let allocations_file = NamedTempFile::new().unwrap();
+    let allocations_csv = allocations_file.path().to_str().unwrap().to_string();
+    let mut wtr = csv::WriterBuilder::new().from_writer(allocations_file);
+    wtr.serialize(&allocation).unwrap();
+    wtr.flush().unwrap();
+
+    let dir = tempdir().unwrap();
+    let transactions_csv = dir
+        .path()
+        .join("transactions.csv")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let args: DistributeStakeArgs<Pubkey, Box<dyn Signer>> = DistributeStakeArgs {
+        stake_account_address,
+        stake_authority: Some(Box::new(stake_authority)),
+        withdraw_authority: Some(Box::new(withdraw_authority)),
+        fee_payer: Some(Box::new(fee_payer)),
+        dry_run: false,
+        allocations_csv,
+        transactions_csv: transactions_csv.clone(),
+    };
+    process_distribute_stake(&thin_client, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&transactions_csv);
+    assert_eq!(transaction_infos.len(), 1);
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    let expected_amount = allocation.amount;
+    assert_eq!(transaction_infos[0].amount, expected_amount);
+
+    assert_eq!(
+        thin_client.get_balance(&alice_pubkey).unwrap(),
+        sol_to_lamports(1.0),
+    );
+    let new_stake_account_address = transaction_infos[0]
+        .new_stake_account_address
+        .parse()
+        .unwrap();
+    assert_eq!(
+        thin_client.get_balance(&new_stake_account_address).unwrap(),
+        sol_to_lamports(expected_amount - 1.0),
+    );
+
+    // Now, run it again, and check there's no double-spend.
+    process_distribute_stake(&thin_client, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&transactions_csv);
+    assert_eq!(transaction_infos.len(), 1);
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    let expected_amount = allocation.amount;
+    assert_eq!(transaction_infos[0].amount, expected_amount);
+
+    assert_eq!(
+        thin_client.get_balance(&alice_pubkey).unwrap(),
+        sol_to_lamports(1.0),
+    );
+    assert_eq!(
+        thin_client.get_balance(&new_stake_account_address).unwrap(),
+        sol_to_lamports(expected_amount - 1.0),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +572,14 @@ mod tests {
         let bank = Bank::new(&genesis_config);
         let bank_client = BankClient::new(bank);
         test_process_distribute_with_client(bank_client, sender_keypair);
+    }
+
+    #[test]
+    fn test_process_distribute_stake() {
+        let (genesis_config, sender_keypair) = create_genesis_config(sol_to_lamports(9_000_000.0));
+        let bank = Bank::new(&genesis_config);
+        let bank_client = BankClient::new(bank);
+        test_process_distribute_stake_with_client(bank_client, sender_keypair);
     }
 
     #[test]
