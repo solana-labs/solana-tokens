@@ -63,23 +63,6 @@ impl Client for BankClient {
     }
 }
 
-impl Client for () {
-    fn send_and_confirm_transaction1(
-        &self,
-        _transaction: Transaction,
-    ) -> Result<(), TransportError> {
-        Ok(())
-    }
-
-    fn get_balance1(&self, _pubkey: &Pubkey) -> Result<u64, TransportError> {
-        Ok(0)
-    }
-
-    fn get_recent_blockhash_and_fees(&self) -> Result<(Hash, FeeCalculator), TransportError> {
-        Ok((Hash::default(), FeeCalculator::default()))
-    }
-}
-
 pub struct ThinClient<C: Client>(pub C);
 
 impl<C: Client> ThinClient<C> {
