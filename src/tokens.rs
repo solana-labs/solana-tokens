@@ -144,20 +144,20 @@ fn distribute_stake<T: Client>(
     allocations: &[Allocation],
     args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), pickledb::error::Error> {
-    let new_stake_account_keypair = Keypair::new();
-    let new_stake_account_address = new_stake_account_keypair.pubkey();
-    let signers = if args.dry_run {
-        vec![]
-    } else {
-        vec![
-            &**args.fee_payer.as_ref().unwrap(),
-            &**args.stake_authority.as_ref().unwrap(),
-            &**args.withdraw_authority.as_ref().unwrap(),
-            &new_stake_account_keypair,
-        ]
-    };
-
     for allocation in allocations {
+        let new_stake_account_keypair = Keypair::new();
+        let new_stake_account_address = new_stake_account_keypair.pubkey();
+        let signers = if args.dry_run {
+            vec![]
+        } else {
+            vec![
+                &**args.fee_payer.as_ref().unwrap(),
+                &**args.stake_authority.as_ref().unwrap(),
+                &**args.withdraw_authority.as_ref().unwrap(),
+                &new_stake_account_keypair,
+            ]
+        };
+
         println!("{:<44}  {:>24.9}", allocation.recipient, allocation.amount);
         let result = if args.dry_run {
             Ok(Signature::default())
