@@ -3,6 +3,7 @@ use crate::thin_client::{Client, ThinClient};
 use console::style;
 use csv::{ReaderBuilder, Trim};
 use indexmap::IndexMap;
+use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     message::Message,
@@ -14,7 +15,6 @@ use solana_stake_program::{
     stake_instruction,
     stake_state::{Authorized, Lockup, StakeAuthorize},
 };
-use std::fs;
 use std::path::Path;
 use std::process;
 
@@ -34,7 +34,6 @@ struct Allocation {
 struct TransactionInfo {
     recipient: String,
     amount: f64,
-    signature: String,
     new_stake_account_address: String,
 }
 
@@ -113,7 +112,7 @@ fn distribute_tokens<T: Client>(
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
                 if !args.dry_run {
-                    append_transaction_info(&allocation, &signature, None, &args.transactions_csv)?;
+                    append_transaction_info(&allocation, &signature, None, &args.transactions_db)?;
                 }
             }
             Err(e) => {
@@ -195,7 +194,7 @@ fn distribute_stake<T: Client>(
                         &allocation,
                         &signature,
                         Some(&new_stake_account_address),
-                        &args.transactions_csv,
+                        &args.transactions_db,
                     )?;
                 }
             }
@@ -208,39 +207,31 @@ fn distribute_stake<T: Client>(
 }
 
 fn read_transaction_infos(path: &str) -> Vec<TransactionInfo> {
-    let mut rdr = ReaderBuilder::new()
-        .trim(Trim::All)
-        .from_path(&path)
-        .unwrap();
-    rdr.deserialize().map(|x| x.unwrap()).collect()
+    let db = PickleDb::load_yaml(path, PickleDbDumpPolicy::AutoDump).unwrap();
+    db.iter()
+        .map(|kv| kv.get_value::<TransactionInfo>().unwrap())
+        .collect()
 }
 
 fn append_transaction_info(
     allocation: &Allocation,
     signature: &Signature,
     new_stake_account_address: Option<&Pubkey>,
-    transactions_csv: &str,
+    transactions_db: &str,
 ) -> Result<(), csv::Error> {
-    let existed = Path::new(&transactions_csv).exists();
-    let file = fs::OpenOptions::new()
-        .create_new(!existed)
-        .write(true)
-        .append(existed)
-        .open(&transactions_csv)?;
-    let mut wtr = csv::WriterBuilder::new()
-        .has_headers(!existed)
-        .from_writer(file);
-
     let transaction_info = TransactionInfo {
         recipient: allocation.recipient.clone(),
         amount: allocation.amount,
-        signature: signature.to_string(),
         new_stake_account_address: new_stake_account_address
             .map(|pubkey| pubkey.to_string())
             .unwrap_or("".to_string()),
     };
-    wtr.serialize(transaction_info)?;
-    wtr.flush()?;
+    let mut db = if Path::new(transactions_db).exists() {
+        PickleDb::load_yaml(transactions_db, PickleDbDumpPolicy::AutoDump).unwrap()
+    } else {
+        PickleDb::new_yaml(transactions_db, PickleDbDumpPolicy::AutoDump)
+    };
+    db.set(&signature.to_string(), &transaction_info).unwrap();
     Ok(())
 }
 
@@ -265,8 +256,8 @@ pub fn process_distribute_tokens<T: Client>(
         starting_total_tokens * args.dollars_per_sol,
     );
 
-    let transaction_infos = if Path::new(&args.transactions_csv).exists() {
-        read_transaction_infos(&args.transactions_csv)
+    let transaction_infos = if Path::new(&args.transactions_db).exists() {
+        read_transaction_infos(&args.transactions_db)
     } else {
         vec![]
     };
@@ -346,8 +337,8 @@ pub fn process_distribute_stake<T: Client>(
         .map(|allocation| allocation.unwrap())
         .collect();
 
-    let transaction_infos = if Path::new(&args.transactions_csv).exists() {
-        read_transaction_infos(&args.transactions_csv)
+    let transaction_infos = if Path::new(&args.transactions_db).exists() {
+        read_transaction_infos(&args.transactions_db)
     } else {
         vec![]
     };
@@ -425,7 +416,7 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
     wtr.flush().unwrap();
 
     let dir = tempdir().unwrap();
-    let transactions_csv = dir
+    let transactions_db = dir
         .path()
         .join("transactions.csv")
         .to_str()
@@ -437,11 +428,11 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
         bids_csv,
-        transactions_csv: transactions_csv.clone(),
+        transactions_db: transactions_db.clone(),
         dollars_per_sol: 0.22,
     };
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_csv);
+    let transaction_infos = read_transaction_infos(&transactions_db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -454,7 +445,7 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_csv);
+    let transaction_infos = read_transaction_infos(&transactions_db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -507,7 +498,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     wtr.flush().unwrap();
 
     let dir = tempdir().unwrap();
-    let transactions_csv = dir
+    let transactions_db = dir
         .path()
         .join("transactions.csv")
         .to_str()
@@ -521,10 +512,10 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
         allocations_csv,
-        transactions_csv: transactions_csv.clone(),
+        transactions_db: transactions_db.clone(),
     };
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_csv);
+    let transaction_infos = read_transaction_infos(&transactions_db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
@@ -545,7 +536,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_csv);
+    let transaction_infos = read_transaction_infos(&transactions_db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
@@ -598,7 +589,6 @@ mod tests {
         let transaction_infos = vec![TransactionInfo {
             recipient: "b".to_string(),
             amount: 1.0,
-            signature: "".to_string(),
             new_stake_account_address: "".to_string(),
         }];
         apply_previous_transactions(&mut allocations, &transaction_infos);
