@@ -238,7 +238,7 @@ fn distribute_stake<T: Client>(
     Ok(())
 }
 
-fn open_db(path: &str) -> Result<PickleDb, pickledb::error::Error> {
+pub fn open_db(path: &str) -> Result<PickleDb, pickledb::error::Error> {
     let policy = PickleDbDumpPolicy::AutoDump;
     if Path::new(path).exists() {
         PickleDb::load_yaml(path, policy)
@@ -274,6 +274,7 @@ fn set_transaction_info(
 
 pub fn process_distribute_tokens<T: Client>(
     client: &ThinClient<T>,
+    db: &mut PickleDb,
     args: &DistributeTokensArgs<Box<dyn Signer>>,
 ) -> Result<(), Error> {
     let mut rdr = ReaderBuilder::new()
@@ -293,7 +294,6 @@ pub fn process_distribute_tokens<T: Client>(
         starting_total_tokens * args.dollars_per_sol,
     );
 
-    let mut db = open_db(&args.transactions_db)?;
     let transaction_infos = read_transaction_infos(&db);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
@@ -353,13 +353,14 @@ pub fn process_distribute_tokens<T: Client>(
         (distributed_tokens + undistributed_tokens) * args.dollars_per_sol,
     );
 
-    distribute_tokens(client, &mut db, &allocations, args)?;
+    distribute_tokens(client, db, &allocations, args)?;
 
     Ok(())
 }
 
 pub fn process_distribute_stake<T: Client>(
     client: &ThinClient<T>,
+    db: &mut PickleDb,
     args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), Error> {
     let mut rdr = ReaderBuilder::new()
@@ -370,7 +371,6 @@ pub fn process_distribute_stake<T: Client>(
         .map(|allocation| allocation.unwrap())
         .collect();
 
-    let mut db = open_db(&args.transactions_db)?;
     let transaction_infos = read_transaction_infos(&db);
     let mut allocations = merge_allocations(&allocations);
     apply_previous_transactions(&mut allocations, &transaction_infos);
@@ -380,7 +380,7 @@ pub fn process_distribute_stake<T: Client>(
         return Ok(());
     }
 
-    distribute_stake(client, &mut db, &allocations, args)?;
+    distribute_stake(client, db, &allocations, args)?;
 
     Ok(())
 }
@@ -460,8 +460,9 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
         transactions_db: transactions_db.clone(),
         dollars_per_sol: 0.22,
     };
-    process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let mut db = open_db(&transactions_db).unwrap();
+    process_distribute_tokens(&thin_client, &mut db, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -473,8 +474,8 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
     );
 
     // Now, run it again, and check there's no double-spend.
-    process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    process_distribute_tokens(&thin_client, &mut db, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -543,8 +544,9 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         allocations_csv,
         transactions_db: transactions_db.clone(),
     };
-    process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let mut db = open_db(&transactions_db).unwrap();
+    process_distribute_stake(&thin_client, &mut db, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
@@ -564,8 +566,8 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     );
 
     // Now, run it again, and check there's no double-spend.
-    process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    process_distribute_stake(&thin_client, &mut db, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&db);
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
