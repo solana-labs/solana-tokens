@@ -69,6 +69,9 @@ fn apply_previous_transactions(
     transaction_infos: &[TransactionInfo],
 ) {
     for transaction_info in transaction_infos {
+        if !transaction_info.finalized {
+            panic!("Attempt to apply an unconfirmed transaction. Please confirm the trarnsaction has been finalized or that its blockhash has expired.");
+        }
         let mut amount = transaction_info.amount;
         for allocation in allocations.iter_mut() {
             if allocation.recipient != transaction_info.recipient {
