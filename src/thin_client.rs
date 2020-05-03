@@ -14,17 +14,16 @@ use solana_sdk::{
 };
 
 pub trait Client {
-    fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<()>;
+    fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature>;
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64>;
     fn get_recent_blockhash_and_fees(&self) -> Result<(Hash, FeeCalculator)>;
 }
 
 impl Client for RpcClient {
-    fn send_and_confirm_transaction1(&self, mut transaction: Transaction) -> Result<()> {
-        let signers: Vec<&Keypair> = vec![];
+    fn send_and_confirm_transaction1(&self, mut transaction: Transaction) -> Result<Signature> {
+        let signers: Vec<&Keypair> = vec![]; // Don't allow resigning
         self.send_and_confirm_transaction_with_spinner(&mut transaction, &signers)
-            .map_err(|e| TransportError::Custom(e.to_string()))?;
-        Ok(())
+            .map_err(|e| TransportError::Custom(e.to_string()))
     }
 
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
@@ -43,8 +42,8 @@ impl Client for RpcClient {
 }
 
 impl Client for BankClient {
-    fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<()> {
-        self.async_send_transaction(transaction).map(|_| ())
+    fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature> {
+        self.async_send_transaction(transaction)
     }
 
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
@@ -59,7 +58,7 @@ impl Client for BankClient {
 pub struct ThinClient<C: Client>(pub C);
 
 impl<C: Client> ThinClient<C> {
-    pub fn send_transaction(&self, transaction: Transaction) -> Result<()> {
+    pub fn send_transaction(&self, transaction: Transaction) -> Result<Signature> {
         self.0.send_and_confirm_transaction1(transaction)
     }
 

@@ -10,6 +10,7 @@ use solana_sdk::{
     native_token::{lamports_to_sol, sol_to_lamports},
     signature::{Signature, Signer},
     system_instruction,
+    transaction::Transaction,
 };
 use solana_stake_program::{
     stake_instruction,
@@ -116,7 +117,11 @@ fn distribute_tokens<T: Client>(
             let lamports = sol_to_lamports(allocation.amount);
             let instruction = system_instruction::transfer(&from, &to, lamports);
             let message = Message::new_with_payer(&[instruction], Some(&fee_payer_pubkey));
-            client.send_message(message, &signers)
+            let (blockhash, _fee_caluclator) = client.get_recent_blockhash_and_fees().unwrap();
+            let transaction = Transaction::new(&signers, message, blockhash);
+            let signature = transaction.signatures[0];
+            set_transaction_info(db, &allocation, &signature, None, false)?;
+            client.send_transaction(transaction)
         };
         match result {
             Ok(signature) => {
@@ -194,8 +199,17 @@ fn distribute_stake<T: Client>(
             ));
 
             let message = Message::new_with_payer(&instructions, Some(&fee_payer_pubkey));
-            println!("Creating stake account {}", new_stake_account_address);
-            client.send_message(message, &signers)
+            let (blockhash, _fee_caluclator) = client.get_recent_blockhash_and_fees().unwrap();
+            let transaction = Transaction::new(&signers, message, blockhash);
+            let signature = transaction.signatures[0];
+            set_transaction_info(
+                db,
+                &allocation,
+                &signature,
+                Some(&new_stake_account_address),
+                false,
+            )?;
+            client.send_transaction(transaction)
         };
         match result {
             Ok(signature) => {
