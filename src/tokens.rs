@@ -35,6 +35,7 @@ struct TransactionInfo {
     recipient: String,
     amount: f64,
     new_stake_account_address: String,
+    finalized: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -121,7 +122,7 @@ fn distribute_tokens<T: Client>(
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
                 if !args.dry_run {
-                    append_transaction_info(db, &allocation, &signature, None)?;
+                    set_transaction_info(db, &allocation, &signature, None, true)?;
                 }
             }
             Err(e) => {
@@ -200,11 +201,12 @@ fn distribute_stake<T: Client>(
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
                 if !args.dry_run {
-                    append_transaction_info(
+                    set_transaction_info(
                         db,
                         &allocation,
                         &signature,
                         Some(&new_stake_account_address),
+                        true,
                     )?;
                 }
             }
@@ -231,11 +233,12 @@ fn read_transaction_infos(db: &PickleDb) -> Vec<TransactionInfo> {
         .collect()
 }
 
-fn append_transaction_info(
+fn set_transaction_info(
     db: &mut PickleDb,
     allocation: &Allocation,
     signature: &Signature,
     new_stake_account_address: Option<&Pubkey>,
+    finalized: bool,
 ) -> Result<(), pickledb::error::Error> {
     let transaction_info = TransactionInfo {
         recipient: allocation.recipient.clone(),
@@ -243,6 +246,7 @@ fn append_transaction_info(
         new_stake_account_address: new_stake_account_address
             .map(|pubkey| pubkey.to_string())
             .unwrap_or("".to_string()),
+        finalized,
     };
     db.set(&signature.to_string(), &transaction_info)?;
     Ok(())
@@ -595,6 +599,7 @@ mod tests {
             recipient: "b".to_string(),
             amount: 1.0,
             new_stake_account_address: "".to_string(),
+            finalized: true,
         }];
         apply_previous_transactions(&mut allocations, &transaction_infos);
         assert_eq!(allocations.len(), 1);
