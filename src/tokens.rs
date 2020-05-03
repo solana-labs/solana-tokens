@@ -214,8 +214,17 @@ fn distribute_stake<T: Client>(
     Ok(())
 }
 
+fn open_db(path: &str) -> Result<PickleDb, pickledb::error::Error> {
+    let policy = PickleDbDumpPolicy::AutoDump;
+    if Path::new(path).exists() {
+        PickleDb::load_yaml(path, policy)
+    } else {
+        Ok(PickleDb::new_yaml(path, policy))
+    }
+}
+
 fn read_transaction_infos(path: &str) -> Result<Vec<TransactionInfo>, pickledb::error::Error> {
-    let db = PickleDb::load_yaml(path, PickleDbDumpPolicy::AutoDump)?;
+    let db = open_db(path)?;
     let transaction_infos = db
         .iter()
         .map(|kv| kv.get_value::<TransactionInfo>().unwrap())
@@ -236,11 +245,7 @@ fn append_transaction_info(
             .map(|pubkey| pubkey.to_string())
             .unwrap_or("".to_string()),
     };
-    let mut db = if Path::new(transactions_db).exists() {
-        PickleDb::load_yaml(transactions_db, PickleDbDumpPolicy::AutoDump)?
-    } else {
-        PickleDb::new_yaml(transactions_db, PickleDbDumpPolicy::AutoDump)
-    };
+    let mut db = open_db(transactions_db)?;
     db.set(&signature.to_string(), &transaction_info)?;
     Ok(())
 }
@@ -266,12 +271,7 @@ pub fn process_distribute_tokens<T: Client>(
         starting_total_tokens * args.dollars_per_sol,
     );
 
-    let transaction_infos = if Path::new(&args.transactions_db).exists() {
-        read_transaction_infos(&args.transactions_db)?
-    } else {
-        vec![]
-    };
-
+    let transaction_infos = read_transaction_infos(&args.transactions_db)?;
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
     if allocations.is_empty() {
@@ -347,12 +347,7 @@ pub fn process_distribute_stake<T: Client>(
         .map(|allocation| allocation.unwrap())
         .collect();
 
-    let transaction_infos = if Path::new(&args.transactions_db).exists() {
-        read_transaction_infos(&args.transactions_db)?
-    } else {
-        vec![]
-    };
-
+    let transaction_infos = read_transaction_infos(&args.transactions_db)?;
     let mut allocations = merge_allocations(&allocations);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
