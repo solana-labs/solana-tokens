@@ -37,6 +37,14 @@ struct TransactionInfo {
     new_stake_account_address: String,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("CSV error")]
+    CsvError(#[from] csv::Error),
+    #[error("PickleDb error")]
+    PickleDbError(#[from] pickledb::error::Error),
+}
+
 fn merge_allocations(allocations: &[Allocation]) -> Vec<Allocation> {
     let mut allocation_map = IndexMap::new();
     for allocation in allocations {
@@ -84,7 +92,7 @@ fn distribute_tokens<T: Client>(
     client: &ThinClient<T>,
     allocations: &[Allocation],
     args: &DistributeTokensArgs<Box<dyn Signer>>,
-) -> Result<(), csv::Error> {
+) -> Result<(), pickledb::error::Error> {
     let signers = if args.dry_run {
         vec![]
     } else {
@@ -127,7 +135,7 @@ fn distribute_stake<T: Client>(
     client: &ThinClient<T>,
     allocations: &[Allocation],
     args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
-) -> Result<(), csv::Error> {
+) -> Result<(), pickledb::error::Error> {
     let new_stake_account_keypair = Keypair::new();
     let new_stake_account_address = new_stake_account_keypair.pubkey();
     let signers = if args.dry_run {
@@ -206,11 +214,13 @@ fn distribute_stake<T: Client>(
     Ok(())
 }
 
-fn read_transaction_infos(path: &str) -> Vec<TransactionInfo> {
-    let db = PickleDb::load_yaml(path, PickleDbDumpPolicy::AutoDump).unwrap();
-    db.iter()
+fn read_transaction_infos(path: &str) -> Result<Vec<TransactionInfo>, pickledb::error::Error> {
+    let db = PickleDb::load_yaml(path, PickleDbDumpPolicy::AutoDump)?;
+    let transaction_infos = db
+        .iter()
         .map(|kv| kv.get_value::<TransactionInfo>().unwrap())
-        .collect()
+        .collect();
+    Ok(transaction_infos)
 }
 
 fn append_transaction_info(
@@ -218,7 +228,7 @@ fn append_transaction_info(
     signature: &Signature,
     new_stake_account_address: Option<&Pubkey>,
     transactions_db: &str,
-) -> Result<(), csv::Error> {
+) -> Result<(), pickledb::error::Error> {
     let transaction_info = TransactionInfo {
         recipient: allocation.recipient.clone(),
         amount: allocation.amount,
@@ -227,18 +237,18 @@ fn append_transaction_info(
             .unwrap_or("".to_string()),
     };
     let mut db = if Path::new(transactions_db).exists() {
-        PickleDb::load_yaml(transactions_db, PickleDbDumpPolicy::AutoDump).unwrap()
+        PickleDb::load_yaml(transactions_db, PickleDbDumpPolicy::AutoDump)?
     } else {
         PickleDb::new_yaml(transactions_db, PickleDbDumpPolicy::AutoDump)
     };
-    db.set(&signature.to_string(), &transaction_info).unwrap();
+    db.set(&signature.to_string(), &transaction_info)?;
     Ok(())
 }
 
 pub fn process_distribute_tokens<T: Client>(
     client: &ThinClient<T>,
     args: &DistributeTokensArgs<Box<dyn Signer>>,
-) -> Result<(), csv::Error> {
+) -> Result<(), Error> {
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
         .from_path(&args.bids_csv)?;
@@ -257,7 +267,7 @@ pub fn process_distribute_tokens<T: Client>(
     );
 
     let transaction_infos = if Path::new(&args.transactions_db).exists() {
-        read_transaction_infos(&args.transactions_db)
+        read_transaction_infos(&args.transactions_db)?
     } else {
         vec![]
     };
@@ -328,7 +338,7 @@ pub fn process_distribute_tokens<T: Client>(
 pub fn process_distribute_stake<T: Client>(
     client: &ThinClient<T>,
     args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
-) -> Result<(), csv::Error> {
+) -> Result<(), Error> {
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
         .from_path(&args.allocations_csv)?;
@@ -338,7 +348,7 @@ pub fn process_distribute_stake<T: Client>(
         .collect();
 
     let transaction_infos = if Path::new(&args.transactions_db).exists() {
-        read_transaction_infos(&args.transactions_db)
+        read_transaction_infos(&args.transactions_db)?
     } else {
         vec![]
     };
@@ -432,7 +442,7 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
         dollars_per_sol: 0.22,
     };
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db);
+    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -445,7 +455,7 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db);
+    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -515,7 +525,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         transactions_db: transactions_db.clone(),
     };
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db);
+    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
@@ -536,7 +546,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db);
+    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;

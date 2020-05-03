@@ -3456,6 +3456,7 @@ dependencies = [
  "solana-sdk",
  "solana-stake-program",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
