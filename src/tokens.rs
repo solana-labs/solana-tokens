@@ -90,6 +90,7 @@ fn create_allocation(bid: &Bid, dollars_per_sol: f64) -> Allocation {
 
 fn distribute_tokens<T: Client>(
     client: &ThinClient<T>,
+    db: &mut PickleDb,
     allocations: &[Allocation],
     args: &DistributeTokensArgs<Box<dyn Signer>>,
 ) -> Result<(), pickledb::error::Error> {
@@ -120,7 +121,7 @@ fn distribute_tokens<T: Client>(
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
                 if !args.dry_run {
-                    append_transaction_info(&allocation, &signature, None, &args.transactions_db)?;
+                    append_transaction_info(db, &allocation, &signature, None)?;
                 }
             }
             Err(e) => {
@@ -133,6 +134,7 @@ fn distribute_tokens<T: Client>(
 
 fn distribute_stake<T: Client>(
     client: &ThinClient<T>,
+    db: &mut PickleDb,
     allocations: &[Allocation],
     args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), pickledb::error::Error> {
@@ -199,10 +201,10 @@ fn distribute_stake<T: Client>(
                 println!("Finalized transaction with signature {}", signature);
                 if !args.dry_run {
                     append_transaction_info(
+                        db,
                         &allocation,
                         &signature,
                         Some(&new_stake_account_address),
-                        &args.transactions_db,
                     )?;
                 }
             }
@@ -223,20 +225,17 @@ fn open_db(path: &str) -> Result<PickleDb, pickledb::error::Error> {
     }
 }
 
-fn read_transaction_infos(path: &str) -> Result<Vec<TransactionInfo>, pickledb::error::Error> {
-    let db = open_db(path)?;
-    let transaction_infos = db
-        .iter()
+fn read_transaction_infos(db: &PickleDb) -> Vec<TransactionInfo> {
+    db.iter()
         .map(|kv| kv.get_value::<TransactionInfo>().unwrap())
-        .collect();
-    Ok(transaction_infos)
+        .collect()
 }
 
 fn append_transaction_info(
+    db: &mut PickleDb,
     allocation: &Allocation,
     signature: &Signature,
     new_stake_account_address: Option<&Pubkey>,
-    transactions_db: &str,
 ) -> Result<(), pickledb::error::Error> {
     let transaction_info = TransactionInfo {
         recipient: allocation.recipient.clone(),
@@ -245,7 +244,6 @@ fn append_transaction_info(
             .map(|pubkey| pubkey.to_string())
             .unwrap_or("".to_string()),
     };
-    let mut db = open_db(transactions_db)?;
     db.set(&signature.to_string(), &transaction_info)?;
     Ok(())
 }
@@ -271,7 +269,8 @@ pub fn process_distribute_tokens<T: Client>(
         starting_total_tokens * args.dollars_per_sol,
     );
 
-    let transaction_infos = read_transaction_infos(&args.transactions_db)?;
+    let mut db = open_db(&args.transactions_db)?;
+    let transaction_infos = read_transaction_infos(&db);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
     if allocations.is_empty() {
@@ -330,7 +329,7 @@ pub fn process_distribute_tokens<T: Client>(
         (distributed_tokens + undistributed_tokens) * args.dollars_per_sol,
     );
 
-    distribute_tokens(client, &allocations, args)?;
+    distribute_tokens(client, &mut db, &allocations, args)?;
 
     Ok(())
 }
@@ -347,7 +346,8 @@ pub fn process_distribute_stake<T: Client>(
         .map(|allocation| allocation.unwrap())
         .collect();
 
-    let transaction_infos = read_transaction_infos(&args.transactions_db)?;
+    let mut db = open_db(&args.transactions_db)?;
+    let transaction_infos = read_transaction_infos(&db);
     let mut allocations = merge_allocations(&allocations);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
@@ -356,7 +356,7 @@ pub fn process_distribute_stake<T: Client>(
         return Ok(());
     }
 
-    distribute_stake(client, &allocations, args)?;
+    distribute_stake(client, &mut db, &allocations, args)?;
 
     Ok(())
 }
@@ -437,7 +437,7 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
         dollars_per_sol: 0.22,
     };
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -450,7 +450,7 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol;
@@ -520,7 +520,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         transactions_db: transactions_db.clone(),
     };
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
@@ -541,7 +541,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&transactions_db).unwrap();
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = allocation.amount;
