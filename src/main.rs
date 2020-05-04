@@ -18,12 +18,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     match resolve_command(command_args.command)? {
         Command::DistributeTokens(args) => {
-            let mut db = tokens::open_db(&args.transactions_db)?;
-            tokens::process_distribute_tokens(&thin_client, &mut db, &args)?;
+            tokens::process_distribute_tokens(&thin_client, &args)?;
         }
         Command::DistributeStake(args) => {
-            let mut db = tokens::open_db(&args.transactions_db)?;
-            tokens::process_distribute_stake(&thin_client, &mut db, &args)?;
+            tokens::process_distribute_stake(&thin_client, &args)?;
         }
         Command::Balances(args) => {
             tokens::process_balances(&thin_client, &args)?;
