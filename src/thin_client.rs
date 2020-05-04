@@ -43,7 +43,9 @@ impl Client for RpcClient {
 
 impl Client for BankClient {
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature> {
-        self.async_send_transaction(transaction)
+        let signature = self.async_send_transaction(transaction)?;
+        self.poll_for_signature(&signature)?;
+        Ok(signature)
     }
 
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
