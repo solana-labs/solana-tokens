@@ -6,7 +6,7 @@ use solana_sdk::{
     hash::Hash,
     message::Message,
     pubkey::Pubkey,
-    signature::{Keypair, Signature, Signer},
+    signature::{Signature, Signer},
     signers::Signers,
     system_instruction,
     transaction::Transaction,
@@ -14,45 +14,64 @@ use solana_sdk::{
 };
 
 pub trait Client {
+    fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature>;
+
+    // TODO: Work to delete this
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature>;
+
+    fn poll_for_signature1(&self, signature: &Signature) -> Result<()>;
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64>;
-    fn get_recent_blockhash_and_fees(&self) -> Result<(Hash, FeeCalculator)>;
+    fn get_recent_blockhash1(&self) -> Result<(Hash, FeeCalculator)>;
 }
 
 impl Client for RpcClient {
+    fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
+        self.send_transaction(&transaction)
+            .map_err(|e| TransportError::Custom(e.to_string()))
+    }
+
     fn send_and_confirm_transaction1(&self, mut transaction: Transaction) -> Result<Signature> {
-        let signers: Vec<&Keypair> = vec![]; // Don't allow resigning
+        let signers: Vec<&dyn Signer> = vec![]; // Don't allow resigning
         self.send_and_confirm_transaction_with_spinner(&mut transaction, &signers)
             .map_err(|e| TransportError::Custom(e.to_string()))
     }
 
-    fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
-        let balance = self
-            .get_balance(pubkey)
-            .map_err(|e| TransportError::Custom(e.to_string()))?;
-        Ok(balance)
+    fn poll_for_signature1(&self, signature: &Signature) -> Result<()> {
+        self.poll_for_signature(signature)
+            .map_err(|e| TransportError::Custom(e.to_string()))
     }
 
-    fn get_recent_blockhash_and_fees(&self) -> Result<(Hash, FeeCalculator)> {
-        let blockhash = self
-            .get_recent_blockhash()
-            .map_err(|e| TransportError::Custom(e.to_string()))?;
-        Ok(blockhash)
+    fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
+        self.get_balance(pubkey)
+            .map_err(|e| TransportError::Custom(e.to_string()))
+    }
+
+    fn get_recent_blockhash1(&self) -> Result<(Hash, FeeCalculator)> {
+        self.get_recent_blockhash()
+            .map_err(|e| TransportError::Custom(e.to_string()))
     }
 }
 
 impl Client for BankClient {
+    fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
+        self.async_send_transaction(transaction)
+    }
+
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature> {
-        let signature = self.async_send_transaction(transaction)?;
-        self.poll_for_signature(&signature)?;
+        let signature = self.async_send_transaction1(transaction)?;
+        self.poll_for_signature1(&signature)?;
         Ok(signature)
+    }
+
+    fn poll_for_signature1(&self, signature: &Signature) -> Result<()> {
+        self.poll_for_signature(signature)
     }
 
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
         self.get_balance(pubkey)
     }
 
-    fn get_recent_blockhash_and_fees(&self) -> Result<(Hash, FeeCalculator)> {
+    fn get_recent_blockhash1(&self) -> Result<(Hash, FeeCalculator)> {
         self.get_recent_blockhash()
     }
 }
@@ -60,16 +79,20 @@ impl Client for BankClient {
 pub struct ThinClient<C: Client>(pub C);
 
 impl<C: Client> ThinClient<C> {
+    pub fn async_send_transaction(&self, transaction: Transaction) -> Result<Signature> {
+        self.0.async_send_transaction1(transaction)
+    }
+
     pub fn send_transaction(&self, transaction: Transaction) -> Result<Signature> {
+        // TODO: implement this in terms of ThinClient methods and then remove
+        // send_and_confirm_transaction1 from from the Client trait.
         self.0.send_and_confirm_transaction1(transaction)
     }
 
     pub fn send_message<S: Signers>(&self, message: Message, signers: &S) -> Result<Signature> {
-        let (blockhash, _fee_caluclator) = self.0.get_recent_blockhash_and_fees()?;
+        let (blockhash, _fee_caluclator) = self.get_recent_blockhash()?;
         let transaction = Transaction::new(signers, message, blockhash);
-        let signature = transaction.signatures[0];
-        self.send_transaction(transaction)?;
-        Ok(signature)
+        self.send_transaction(transaction)
     }
 
     pub fn transfer<S: Signer>(
@@ -84,8 +107,12 @@ impl<C: Client> ThinClient<C> {
         self.send_message(message, &[sender_keypair])
     }
 
-    pub fn get_recent_blockhash_and_fees(&self) -> Result<(Hash, FeeCalculator)> {
-        self.0.get_recent_blockhash_and_fees()
+    pub fn poll_for_signature(&self, signature: &Signature) -> Result<()> {
+        self.0.poll_for_signature1(signature)
+    }
+
+    pub fn get_recent_blockhash(&self) -> Result<(Hash, FeeCalculator)> {
+        self.0.get_recent_blockhash1()
     }
 
     pub fn get_balance(&self, pubkey: &Pubkey) -> Result<u64> {
