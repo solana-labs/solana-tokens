@@ -44,15 +44,19 @@ where
                 .arg(
                     Arg::with_name("allocations_csv")
                         .long("allocations-csv")
-                        .help("Input CSV contains token allocations, not bids"),
-                )
-                .arg(
-                    Arg::with_name("input_csv")
-                        .long("input_csv")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
-                        .help("Input CSV file"),
+                        .help("Allocations CSV file")
+                        .conflicts_with("bids_csv"),
+                )
+                .arg(
+                    Arg::with_name("bids_csv")
+                        .long("bids-csv")
+                        .required(true)
+                        .takes_value(true)
+                        .value_name("FILE")
+                        .help("Bids CSV file"),
                 )
                 .arg(
                     Arg::with_name("dollars_per_sol")
@@ -60,8 +64,8 @@ where
                         .required(true)
                         .takes_value(true)
                         .value_name("NUMBER")
-                        .help("Dollars per SOL, if input CSV contains bids")
-                        .conflicts_with("allocations_csv")
+                        .help("For converting bids to SOL, \
+                        or displaying total fiat in allocations ")
                 )
                 .arg(
                     Arg::with_name("dry_run")
@@ -147,8 +151,8 @@ where
             SubCommand::with_name("balances")
                 .about("Balance of each account")
                 .arg(
-                    Arg::with_name("input_csv")
-                        .long("input_csv")
+                    Arg::with_name("bids_csv")
+                        .long("bids-csv")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
@@ -168,8 +172,8 @@ where
 
 fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs<String> {
     DistributeTokensArgs {
-        input_csv: value_t_or_exit!(matches, "input_csv", String),
-        allocations_csv: matches.is_present("allocations_csv"),
+        bids_csv: value_t!(matches, "bids_csv", String).ok(),
+        allocations_csv: value_t!(matches, "allocations_csv", String).ok(),
         transactions_db: value_t_or_exit!(matches, "transactions_db", String),
         dollars_per_sol: value_t!(matches, "dollars_per_sol", f64).ok(),
         dry_run: matches.is_present("dry_run"),
@@ -192,7 +196,7 @@ fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeStakeArgs<
 
 fn parse_balances_args(matches: &ArgMatches<'_>) -> BalancesArgs {
     BalancesArgs {
-        input_csv: value_t_or_exit!(matches, "input_csv", String),
+        bids_csv: value_t_or_exit!(matches, "bids_csv", String),
         dollars_per_sol: value_t_or_exit!(matches, "dollars_per_sol", f64),
     }
 }

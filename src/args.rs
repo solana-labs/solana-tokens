@@ -5,8 +5,8 @@ use solana_sdk::{pubkey::Pubkey, signature::Signer};
 use std::error::Error;
 
 pub struct DistributeTokensArgs<K> {
-    pub input_csv: String,
-    pub allocations_csv: bool,
+    pub bids_csv: Option<String>,
+    pub allocations_csv: Option<String>,
     pub transactions_db: String,
     pub dollars_per_sol: Option<f64>,
     pub dry_run: bool,
@@ -25,7 +25,7 @@ pub struct DistributeStakeArgs<P, K> {
 }
 
 pub struct BalancesArgs {
-    pub input_csv: String,
+    pub bids_csv: String,
     pub dollars_per_sol: f64,
 }
 
@@ -49,7 +49,7 @@ pub fn resolve_command(
             let mut wallet_manager = maybe_wallet_manager()?;
             let matches = ArgMatches::default();
             let resolved_args = DistributeTokensArgs {
-                input_csv: args.input_csv,
+                bids_csv: args.bids_csv,
                 allocations_csv: args.allocations_csv,
                 transactions_db: args.transactions_db,
                 dollars_per_sol: args.dollars_per_sol,
