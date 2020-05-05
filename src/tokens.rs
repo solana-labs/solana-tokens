@@ -272,22 +272,28 @@ fn set_transaction_info(
     Ok(())
 }
 
-pub fn process_distribute_tokens<T: Client>(
-    client: &ThinClient<T>,
-    args: &DistributeTokensArgs<Box<dyn Signer>>,
-) -> Result<(), Error> {
-    let mut rdr = ReaderBuilder::new()
+fn read_allocations(
+    args: &DistributeTokensArgs<Box<dyn Signer>>
+) -> Vec<Allocation> {
+    let rdr = ReaderBuilder::new()
         .trim(Trim::All)
-        .from_path(&args.input_csv)?;
-    let mut allocations: Vec<Allocation> = if args.from_bids {
-        let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
+        .from_path(&args.input_csv);
+    if args.from_bids {
+        let bids: Vec<Bid> = rdr.unwrap().deserialize().map(|bid| bid.unwrap()).collect();
         bids
             .into_iter()
             .map(|bid| create_allocation(&bid, args.dollars_per_sol.unwrap()))
             .collect()
     } else {
-        rdr.deserialize().map(|entry| entry.unwrap()).collect()
-    };
+        rdr.unwrap().deserialize().map(|entry| entry.unwrap()).collect()
+    }
+}
+
+pub fn process_distribute_tokens<T: Client>(
+    client: &ThinClient<T>,
+    args: &DistributeTokensArgs<Box<dyn Signer>>,
+) -> Result<(), Error> {
+    let mut allocations: Vec<Allocation> = read_allocations(&args);
 
     let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
     println!(
