@@ -127,12 +127,16 @@ fn distribute_tokens<T: Client>(
             let transaction = Transaction::new(&signers, message, blockhash);
             let signature = transaction.signatures[0];
             set_transaction_info(db, &allocation, &signature, None, false)?;
-            client.send_transaction(transaction)
+            if args.no_wait {
+                client.async_send_transaction(transaction)
+            } else {
+                client.send_transaction(transaction)
+            }
         };
         match result {
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
-                if !args.dry_run {
+                if !args.dry_run && !args.no_wait {
                     set_transaction_info(db, &allocation, &signature, None, true)?;
                 }
             }
@@ -215,12 +219,16 @@ fn distribute_stake<T: Client>(
                 Some(&new_stake_account_address),
                 false,
             )?;
-            client.send_transaction(transaction)
+            if args.no_wait {
+                client.async_send_transaction(transaction)
+            } else {
+                client.send_transaction(transaction)
+            }
         };
         match result {
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
-                if !args.dry_run {
+                if !args.dry_run && !args.no_wait {
                     set_transaction_info(
                         db,
                         &allocation,
@@ -487,6 +495,7 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
         sender_keypair: Some(Box::new(sender_keypair)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
+        no_wait: false,
         from_bids: true,
         input_csv,
         transactions_db: transactions_db.clone(),
@@ -551,6 +560,7 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(
         sender_keypair: Some(Box::new(sender_keypair)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
+        no_wait: false,
         input_csv,
         from_bids: false,
         transactions_db: transactions_db.clone(),
@@ -636,6 +646,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         withdraw_authority: Some(Box::new(withdraw_authority)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
+        no_wait: false,
         sol_for_fees: 1.0,
         allocations_csv,
         transactions_db: transactions_db.clone(),
