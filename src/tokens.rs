@@ -276,29 +276,17 @@ pub fn process_distribute_tokens<T: Client>(
     client: &ThinClient<T>,
     args: &DistributeTokensArgs<Box<dyn Signer>>,
 ) -> Result<(), Error> {
-    let input_csv = if let Some(i) = &args.allocations_csv {
-        i
-    } else {
-        let Some(i) = &args.bids_csv;
-        i
-    };
-    let mut allocations: Vec<Allocation> = if let Some(_) = &args.allocations_csv {
-        let mut rdr = ReaderBuilder::new()
-            .trim(Trim::All)
-            .from_path(input_csv)?;
-            rdr.deserialize().map(|entry| entry.unwrap()).collect()
-        } else {
-        let mut rdr = ReaderBuilder::new()
-            .trim(Trim::All)
-            .from_path(input_csv)?;
-        let bids: Vec<Bid> = rdr
-            .deserialize()
-            .map(|bid| bid.unwrap())
-            .collect();
+    let mut rdr = ReaderBuilder::new()
+        .trim(Trim::All)
+        .from_path(&args.input_csv)?;
+    let mut allocations: Vec<Allocation> = if args.from_bids {
+        let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
         bids
             .into_iter()
             .map(|bid| create_allocation(&bid, args.dollars_per_sol.unwrap()))
             .collect()
+    } else {
+        rdr.deserialize().map(|entry| entry.unwrap()).collect()
     };
 
     let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
@@ -431,7 +419,7 @@ pub fn process_balances<T: Client>(
 ) -> Result<(), csv::Error> {
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
-        .from_path(&args.bids_csv)?;
+        .from_path(&args.input_csv)?;
     let bids: Vec<Bid> = rdr.deserialize().map(|bid| bid.unwrap()).collect();
     let allocations: Vec<Allocation> = bids
         .into_iter()
@@ -479,7 +467,7 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
         accepted_amount_dollars: 1000.0,
     };
     let bids_file = NamedTempFile::new().unwrap();
-    let bids_csv = bids_file.path().to_str().unwrap().to_string();
+    let input_csv = bids_file.path().to_str().unwrap().to_string();
     let mut wtr = csv::WriterBuilder::new().from_writer(bids_file);
     wtr.serialize(&bid).unwrap();
     wtr.flush().unwrap();
@@ -496,8 +484,8 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
         sender_keypair: Some(Box::new(sender_keypair)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
-        allocations_csv: None,
-        bids_csv: Some(bids_csv),
+        from_bids: true,
+        input_csv,
         transactions_db: transactions_db.clone(),
         dollars_per_sol: Some(0.22),
     };
@@ -540,7 +528,7 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(client: C, sen
         amount: 1000.0,
     };
     let allocations_file = NamedTempFile::new().unwrap();
-    let allocations_csv = allocations_file.path().to_str().unwrap().to_string();
+    let input_csv = allocations_file.path().to_str().unwrap().to_string();
     let mut wtr = csv::WriterBuilder::new().from_writer(allocations_file);
     wtr.serialize(&allocation).unwrap();
     wtr.flush().unwrap();
@@ -557,8 +545,8 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(client: C, sen
         sender_keypair: Some(Box::new(sender_keypair)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
-        allocations_csv: Some(allocations_csv),
-        bids_csv: None,
+        input_csv,
+        from_bids: false,
         transactions_db: transactions_db.clone(),
         dollars_per_sol: None,
     };
