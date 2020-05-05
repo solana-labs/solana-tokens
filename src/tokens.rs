@@ -454,7 +454,7 @@ pub fn process_balances<T: Client>(
 
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use tempfile::{tempdir, NamedTempFile};
-pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair: Keypair) {
+pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_keypair: Keypair) {
     let thin_client = ThinClient(client);
     let fee_payer = Keypair::new();
     thin_client
@@ -507,6 +507,67 @@ pub fn test_process_distribute_with_client<C: Client>(client: C, sender_keypair:
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol.unwrap();
+    assert_eq!(transaction_infos[0].amount, expected_amount);
+
+    assert_eq!(
+        thin_client.get_balance(&alice_pubkey).unwrap(),
+        sol_to_lamports(expected_amount),
+    );
+}
+
+pub fn test_process_distribute_allocations_with_client<C: Client>(client: C, sender_keypair: Keypair) {
+    let thin_client = ThinClient(client);
+    let fee_payer = Keypair::new();
+    thin_client
+        .transfer(sol_to_lamports(1.0), &sender_keypair, &fee_payer.pubkey())
+        .unwrap();
+
+    let alice_pubkey = Pubkey::new_rand();
+    let allocation = Allocation {
+        recipient: alice_pubkey.to_string(),
+        amount: 1000.0,
+    };
+    let allocations_file = NamedTempFile::new().unwrap();
+    let input_csv = allocations_file.path().to_str().unwrap().to_string();
+    let mut wtr = csv::WriterBuilder::new().from_writer(allocations_file);
+    wtr.serialize(&allocation).unwrap();
+    wtr.flush().unwrap();
+
+    let dir = tempdir().unwrap();
+    let transactions_db = dir
+        .path()
+        .join("transactions.csv")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let args: DistributeTokensArgs<Box<dyn Signer>> = DistributeTokensArgs {
+        sender_keypair: Some(Box::new(sender_keypair)),
+        fee_payer: Some(Box::new(fee_payer)),
+        dry_run: false,
+        allocations_csv: true,
+        input_csv,
+        transactions_db: transactions_db.clone(),
+        dollars_per_sol: None,
+    };
+    process_distribute_tokens(&thin_client, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    assert_eq!(transaction_infos.len(), 1);
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    let expected_amount = allocation.amount;
+    assert_eq!(transaction_infos[0].amount, expected_amount);
+
+    assert_eq!(
+        thin_client.get_balance(&alice_pubkey).unwrap(),
+        sol_to_lamports(expected_amount),
+    );
+
+    // Now, run it again, and check there's no double-spend.
+    process_distribute_tokens(&thin_client, &args).unwrap();
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    assert_eq!(transaction_infos.len(), 1);
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    let expected_amount = allocation.amount;
     assert_eq!(transaction_infos[0].amount, expected_amount);
 
     assert_eq!(
@@ -617,11 +678,19 @@ mod tests {
     use solana_sdk::genesis_config::create_genesis_config;
 
     #[test]
-    fn test_process_distribute() {
+    fn test_process_distribute_bids() {
         let (genesis_config, sender_keypair) = create_genesis_config(sol_to_lamports(9_000_000.0));
         let bank = Bank::new(&genesis_config);
         let bank_client = BankClient::new(bank);
-        test_process_distribute_with_client(bank_client, sender_keypair);
+        test_process_distribute_bids_with_client(bank_client, sender_keypair);
+    }
+
+    #[test]
+    fn test_process_distribute_allocations() {
+        let (genesis_config, sender_keypair) = create_genesis_config(sol_to_lamports(9_000_000.0));
+        let bank = Bank::new(&genesis_config);
+        let bank_client = BankClient::new(bank);
+        test_process_distribute_allocations_with_client(bank_client, sender_keypair);
     }
 
     #[test]
