@@ -33,7 +33,7 @@ struct Allocation {
     amount: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 struct TransactionInfo {
     recipient: String,
     amount: f64,
@@ -804,7 +804,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 mod tests {
     use super::*;
     use solana_runtime::{bank::Bank, bank_client::BankClient};
-    use solana_sdk::genesis_config::create_genesis_config;
+    use solana_sdk::{transaction::TransactionError, genesis_config::create_genesis_config};
 
     #[test]
     fn test_process_distribute_bids() {
@@ -854,5 +854,61 @@ mod tests {
         // Ensure that we applied the transaction to the allocation with
         // a matching recipient address (to "b", not "a").
         assert_eq!(allocations[0].recipient, "a");
+    }
+
+    #[test]
+    fn test_update_finalized_transaction_not_landed() {
+        // Keep waiting for a transaction that hasn't landed yet.
+        let mut db = PickleDb::new_yaml(NamedTempFile::new().unwrap(), PickleDbDumpPolicy::NeverDump);
+        let signature = Signature::default();
+        let transaction_info = TransactionInfo::default();
+        db.set(&signature.to_string(), &transaction_info).unwrap();
+        assert_eq!(update_finalized_transaction(&mut db, &signature, None).unwrap(), true);
+
+        // Unchanged
+        assert_eq!(db.get::<TransactionInfo>(&signature.to_string()).unwrap(), transaction_info);
+    }
+
+    #[test]
+    fn test_update_finalized_transaction_confirming() {
+        // Keep waiting for a transaction that is still being confirmed.
+        let mut db = PickleDb::new_yaml(NamedTempFile::new().unwrap(), PickleDbDumpPolicy::NeverDump);
+        let signature = Signature::default();
+        let transaction_info = TransactionInfo::default();
+        db.set(&signature.to_string(), &transaction_info).unwrap();
+        let transaction_status = TransactionStatus { slot: 0, confirmations: Some(1), status: Ok(()), err: None};
+        assert_eq!(update_finalized_transaction(&mut db, &signature, Some(transaction_status)).unwrap(), true);
+
+        // Unchanged
+        assert_eq!(db.get::<TransactionInfo>(&signature.to_string()).unwrap(), transaction_info);
+    }
+
+    #[test]
+    fn test_update_finalized_transaction_failed() {
+        // Don't wait if the transaction failed to execute.
+        let mut db = PickleDb::new_yaml(NamedTempFile::new().unwrap(), PickleDbDumpPolicy::NeverDump);
+        let signature = Signature::default();
+        let transaction_info = TransactionInfo::default();
+        db.set(&signature.to_string(), &transaction_info).unwrap();
+        let status = Err(TransactionError::AccountNotFound);
+        let transaction_status = TransactionStatus { slot: 0, confirmations: None, status, err: None};
+        assert_eq!(update_finalized_transaction(&mut db, &signature, Some(transaction_status)).unwrap(), false);
+
+        // Ensure TransactionInfo has been purged.
+        assert_eq!(db.get::<TransactionInfo>(&signature.to_string()), None);
+    }
+
+    #[test]
+    fn test_update_finalized_transaction_finalized() {
+        // Don't wait once the transaction has been finalized.
+        let mut db = PickleDb::new_yaml(NamedTempFile::new().unwrap(), PickleDbDumpPolicy::NeverDump);
+        let signature = Signature::default();
+        let mut transaction_info = TransactionInfo::default();
+        db.set(&signature.to_string(), &transaction_info).unwrap();
+        let transaction_status = TransactionStatus { slot: 0, confirmations: None, status: Ok(()), err: None};
+        assert_eq!(update_finalized_transaction(&mut db, &signature, Some(transaction_status)).unwrap(), false);
+
+        transaction_info.finalized = true;
+        assert_eq!(db.get::<TransactionInfo>(&signature.to_string()).unwrap(), transaction_info);
     }
 }
