@@ -255,6 +255,17 @@ fn open_db(path: &str) -> Result<PickleDb, pickledb::error::Error> {
     }
 }
 
+fn read_transaction_data(db: &PickleDb) -> Vec<(Signature, TransactionInfo)> {
+    db.iter()
+        .map(|kv| {
+            (
+                kv.get_key().parse().unwrap(),
+                kv.get_value::<TransactionInfo>().unwrap(),
+            )
+        })
+        .collect()
+}
+
 fn read_transaction_infos(db: &PickleDb) -> Vec<TransactionInfo> {
     db.iter()
         .map(|kv| kv.get_value::<TransactionInfo>().unwrap())
@@ -273,7 +284,7 @@ fn set_transaction_info(
         amount: allocation.amount,
         new_stake_account_address: new_stake_account_address
             .map(|pubkey| pubkey.to_string())
-            .unwrap_or("".to_string()),
+            .unwrap_or_else(|| "".to_string()),
         finalized,
     };
     db.set(&signature.to_string(), &transaction_info)?;
@@ -309,18 +320,24 @@ pub fn process_distribute_tokens<T: Client>(
     let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
     println!(
         "{} ◎{}",
-        style(format!("{}", "Total in allocations_csv:")).bold(),
+        style("Total in allocations_csv:").bold(),
         starting_total_tokens,
     );
     if let Some(dollars_per_sol) = args.dollars_per_sol {
         println!(
             "{} ${}",
-            style(format!("{}", "Total in allocations_csv:")).bold(),
+            style("Total in allocations_csv:").bold(),
             starting_total_tokens * dollars_per_sol,
         );
     }
 
     let mut db = open_db(&args.transactions_db)?;
+    let still_finalizing = update_finalized(client, &mut db)?;
+    if still_finalizing {
+        eprintln!("Still finalizing transactions. Try again in 10 seconds");
+        process::exit(1);
+    }
+
     let transaction_infos = read_transaction_infos(&db);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
@@ -361,39 +378,35 @@ pub fn process_distribute_tokens<T: Client>(
 
     let distributed_tokens: f64 = transaction_infos.iter().map(|x| x.amount).sum();
     let undistributed_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
-    println!(
-        "{} ◎{}",
-        style(format!("{}", "Distributed:")).bold(),
-        distributed_tokens,
-    );
+    println!("{} ◎{}", style("Distributed:").bold(), distributed_tokens,);
     if let Some(dollars_per_sol) = args.dollars_per_sol {
         println!(
             "{} ${}",
-            style(format!("{}", "Distributed:")).bold(),
+            style("Distributed:").bold(),
             distributed_tokens * dollars_per_sol,
         );
     }
     println!(
         "{} ◎{}",
-        style(format!("{}", "Undistributed:")).bold(),
+        style("Undistributed:").bold(),
         undistributed_tokens,
     );
     if let Some(dollars_per_sol) = args.dollars_per_sol {
         println!(
             "{} ${}",
-            style(format!("{}", "Undistributed:")).bold(),
+            style("Undistributed:").bold(),
             undistributed_tokens * dollars_per_sol,
         );
     }
     println!(
         "{} ◎{}",
-        style(format!("{}", "Total:")).bold(),
+        style("Total:").bold(),
         distributed_tokens + undistributed_tokens,
     );
     if let Some(dollars_per_sol) = args.dollars_per_sol {
         println!(
             "{} ${}",
-            style(format!("{}", "Total:")).bold(),
+            style("Total:").bold(),
             (distributed_tokens + undistributed_tokens) * dollars_per_sol,
         );
     }
@@ -401,6 +414,54 @@ pub fn process_distribute_tokens<T: Client>(
     distribute_tokens(client, &mut db, &allocations, args)?;
 
     Ok(())
+}
+
+// Update the finalized bit on any transactions that are now rooted
+fn update_finalized<T: Client>(client: &ThinClient<T>, db: &mut PickleDb) -> Result<bool, Error> {
+    let transaction_data = read_transaction_data(db);
+    let unconfirmed_signatures: Vec<_> = transaction_data
+        .iter()
+        .filter_map(|(signature, info)| {
+            if info.finalized {
+                None
+            } else {
+                Some(*signature)
+            }
+        })
+        .collect();
+    let transaction_statuses = client.get_signature_statuses(&unconfirmed_signatures)?;
+    let mut still_finalizing = false;
+    for (index, opt_transaction_status) in transaction_statuses.into_iter().enumerate() {
+        let signature = unconfirmed_signatures[index];
+        if let Some(transaction_status) = opt_transaction_status {
+            if let Err(e) = transaction_status.status {
+                eprintln!(
+                    "Error in transaction with signature {}: {}",
+                    signature,
+                    e.to_string()
+                );
+                eprintln!("Discarding transaction record");
+                db.rem(&signature.to_string())?;
+                continue;
+            }
+            if transaction_status.confirmations.is_none() {
+                let mut transaction_info =
+                    db.get::<TransactionInfo>(&signature.to_string()).unwrap();
+                // Transaction is rooted. Set finalized in the database.
+                transaction_info.finalized = true;
+                db.set(&signature.to_string(), &transaction_info)?;
+            } else {
+                still_finalizing = true;
+            }
+        } else {
+            eprintln!(
+                "Signature not found {}. If its blockhash is expired, remove it from the database",
+                signature
+            );
+            still_finalizing = true;
+        }
+    }
+    Ok(still_finalizing)
 }
 
 pub fn process_distribute_stake<T: Client>(
@@ -416,8 +477,14 @@ pub fn process_distribute_stake<T: Client>(
         .collect();
 
     let mut db = open_db(&args.transactions_db)?;
-    let transaction_infos = read_transaction_infos(&db);
+    let still_finalizing = update_finalized(client, &mut db)?;
+    if still_finalizing {
+        eprintln!("Still finalizing transactions. Try again in 10 seconds");
+        process::exit(1);
+    }
+
     let mut allocations = merge_allocations(&allocations);
+    let transaction_infos = read_transaction_infos(&db);
     apply_previous_transactions(&mut allocations, &transaction_infos);
 
     if allocations.is_empty() {
@@ -505,12 +572,16 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
-    let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol.unwrap();
-    assert_eq!(transaction_infos[0].amount, expected_amount);
+    let expected_amount =
+        sol_to_lamports(bid.accepted_amount_dollars / args.dollars_per_sol.unwrap());
+    assert_eq!(
+        sol_to_lamports(transaction_infos[0].amount),
+        expected_amount
+    );
 
     assert_eq!(
         thin_client.get_balance(&alice_pubkey).unwrap(),
-        sol_to_lamports(expected_amount),
+        expected_amount,
     );
 
     // Now, run it again, and check there's no double-spend.
@@ -518,12 +589,16 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
-    let expected_amount = bid.accepted_amount_dollars / args.dollars_per_sol.unwrap();
-    assert_eq!(transaction_infos[0].amount, expected_amount);
+    let expected_amount =
+        sol_to_lamports(bid.accepted_amount_dollars / args.dollars_per_sol.unwrap());
+    assert_eq!(
+        sol_to_lamports(transaction_infos[0].amount),
+        expected_amount
+    );
 
     assert_eq!(
         thin_client.get_balance(&alice_pubkey).unwrap(),
-        sol_to_lamports(expected_amount),
+        expected_amount,
     );
 }
 
@@ -570,12 +645,15 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
-    let expected_amount = allocation.amount;
-    assert_eq!(transaction_infos[0].amount, expected_amount);
+    let expected_amount = sol_to_lamports(allocation.amount);
+    assert_eq!(
+        sol_to_lamports(transaction_infos[0].amount),
+        expected_amount
+    );
 
     assert_eq!(
         thin_client.get_balance(&alice_pubkey).unwrap(),
-        sol_to_lamports(expected_amount),
+        expected_amount,
     );
 
     // Now, run it again, and check there's no double-spend.
@@ -583,12 +661,15 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
-    let expected_amount = allocation.amount;
-    assert_eq!(transaction_infos[0].amount, expected_amount);
+    let expected_amount = sol_to_lamports(allocation.amount);
+    assert_eq!(
+        sol_to_lamports(transaction_infos[0].amount),
+        expected_amount
+    );
 
     assert_eq!(
         thin_client.get_balance(&alice_pubkey).unwrap(),
-        sol_to_lamports(expected_amount),
+        expected_amount,
     );
 }
 
@@ -655,8 +736,11 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
-    let expected_amount = allocation.amount;
-    assert_eq!(transaction_infos[0].amount, expected_amount);
+    let expected_amount = sol_to_lamports(allocation.amount);
+    assert_eq!(
+        sol_to_lamports(transaction_infos[0].amount),
+        expected_amount
+    );
 
     assert_eq!(
         thin_client.get_balance(&alice_pubkey).unwrap(),
@@ -668,7 +752,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         .unwrap();
     assert_eq!(
         thin_client.get_balance(&new_stake_account_address).unwrap(),
-        sol_to_lamports(expected_amount - 1.0),
+        expected_amount - sol_to_lamports(1.0),
     );
 
     // Now, run it again, and check there's no double-spend.
@@ -676,8 +760,11 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
-    let expected_amount = allocation.amount;
-    assert_eq!(transaction_infos[0].amount, expected_amount);
+    let expected_amount = sol_to_lamports(allocation.amount);
+    assert_eq!(
+        sol_to_lamports(transaction_infos[0].amount),
+        expected_amount
+    );
 
     assert_eq!(
         thin_client.get_balance(&alice_pubkey).unwrap(),
@@ -685,7 +772,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     );
     assert_eq!(
         thin_client.get_balance(&new_stake_account_address).unwrap(),
-        sol_to_lamports(expected_amount - 1.0),
+        expected_amount - sol_to_lamports(1.0),
     );
 }
 

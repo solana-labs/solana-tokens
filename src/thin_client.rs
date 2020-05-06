@@ -12,6 +12,7 @@ use solana_sdk::{
     transaction::Transaction,
     transport::{Result, TransportError},
 };
+use solana_transaction_status::TransactionStatus;
 
 pub trait Client {
     fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature>;
@@ -19,6 +20,10 @@ pub trait Client {
     // TODO: Work to delete this
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature>;
 
+    fn get_signature_statuses1(
+        &self,
+        signatures: &[Signature],
+    ) -> Result<Vec<Option<TransactionStatus>>>;
     fn poll_for_signature1(&self, signature: &Signature) -> Result<()>;
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64>;
     fn get_recent_blockhash1(&self) -> Result<(Hash, FeeCalculator)>;
@@ -33,6 +38,15 @@ impl Client for RpcClient {
     fn send_and_confirm_transaction1(&self, mut transaction: Transaction) -> Result<Signature> {
         let signers: Vec<&dyn Signer> = vec![]; // Don't allow resigning
         self.send_and_confirm_transaction_with_spinner(&mut transaction, &signers)
+            .map_err(|e| TransportError::Custom(e.to_string()))
+    }
+
+    fn get_signature_statuses1(
+        &self,
+        signatures: &[Signature],
+    ) -> Result<Vec<Option<TransactionStatus>>> {
+        self.get_signature_statuses(signatures)
+            .map(|response| response.value)
             .map_err(|e| TransportError::Custom(e.to_string()))
     }
 
@@ -63,6 +77,25 @@ impl Client for BankClient {
         Ok(signature)
     }
 
+    fn get_signature_statuses1(
+        &self,
+        signatures: &[Signature],
+    ) -> Result<Vec<Option<TransactionStatus>>> {
+        signatures
+            .iter()
+            .map(|signature| {
+                self.get_signature_status(signature).map(|opt| {
+                    opt.map(|status| TransactionStatus {
+                        slot: 0,
+                        confirmations: None,
+                        status,
+                        err: None,
+                    })
+                })
+            })
+            .collect()
+    }
+
     fn poll_for_signature1(&self, signature: &Signature) -> Result<()> {
         self.poll_for_signature(signature)
     }
@@ -81,6 +114,13 @@ pub struct ThinClient<C: Client>(pub C);
 impl<C: Client> ThinClient<C> {
     pub fn async_send_transaction(&self, transaction: Transaction) -> Result<Signature> {
         self.0.async_send_transaction1(transaction)
+    }
+
+    pub fn get_signature_statuses(
+        &self,
+        signatures: &[Signature],
+    ) -> Result<Vec<Option<TransactionStatus>>> {
+        self.0.get_signature_statuses1(signatures)
     }
 
     pub fn send_transaction(&self, transaction: Transaction) -> Result<Signature> {
