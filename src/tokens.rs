@@ -417,39 +417,48 @@ pub fn process_distribute_tokens<T: Client>(
     Ok(())
 }
 
+// Set the finalized bit in the database if the transaction is rooted.
+// Remove the TransactionInfo from the database if the transaction failed.
+// Return true if still waiting to finalize.
 fn update_finalized_transaction(
     db: &mut PickleDb,
     signature: &Signature,
-    opt_transaction_status: &Option<TransactionStatus>,
+    opt_transaction_status: Option<TransactionStatus>,
 ) -> Result<bool, pickledb::error::Error> {
-    let mut still_finalizing = false;
-    if let Some(transaction_status) = opt_transaction_status {
-        if let Err(e) = &transaction_status.status {
-            eprintln!(
-                "Error in transaction with signature {}: {}",
-                signature,
-                e.to_string()
-            );
-            eprintln!("Discarding transaction record");
-            db.rem(&signature.to_string())?;
-            return Ok(false);
-        }
-        if transaction_status.confirmations.is_none() {
-            // Transaction is rooted. Set finalized in the database.
-            let mut transaction_info = db.get::<TransactionInfo>(&signature.to_string()).unwrap();
-            transaction_info.finalized = true;
-            db.set(&signature.to_string(), &transaction_info)?;
-        } else {
-            still_finalizing = true;
-        }
-    } else {
+    if opt_transaction_status.is_none() {
         eprintln!(
             "Signature not found {}. If its blockhash is expired, remove it from the database",
             signature
         );
-        still_finalizing = true;
+
+        // Return true because the transaction might still be in flight and get accepted onto
+        // the ledger.
+        return Ok(true);
     }
-    Ok(still_finalizing)
+    let transaction_status = opt_transaction_status.unwrap();
+
+    if transaction_status.confirmations.is_some() {
+        // The transaction was found but is not yet finalized.
+        return Ok(true);
+    }
+
+    if let Err(e) = &transaction_status.status {
+        // The transaction was finalized, but execution failed. Drop it.
+        eprintln!(
+            "Error in transaction with signature {}: {}",
+            signature,
+            e.to_string()
+        );
+        eprintln!("Discarding transaction record");
+        db.rem(&signature.to_string())?;
+        return Ok(false);
+    }
+
+    // Transaction is rooted. Set finalized in the database.
+    let mut transaction_info = db.get::<TransactionInfo>(&signature.to_string()).unwrap();
+    transaction_info.finalized = true;
+    db.set(&signature.to_string(), &transaction_info)?;
+    Ok(false)
 }
 
 // Update the finalized bit on any transactions that are now rooted
@@ -474,7 +483,7 @@ fn update_finalized_transactions<T: Client>(
         .into_iter()
         .zip(transaction_statuses.into_iter())
     {
-        still_finalizing |= update_finalized_transaction(db, &signature, &opt_transaction_status)?;
+        still_finalizing |= update_finalized_transaction(db, &signature, opt_transaction_status)?;
     }
     Ok(still_finalizing)
 }
