@@ -137,7 +137,7 @@ fn distribute_tokens<T: Client>(
         match result {
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
-                if !args.dry_run && !args.no_wait {
+                if !args.no_wait {
                     set_transaction_info(db, &allocation, &signature, None, true)?;
                 }
             }
@@ -229,7 +229,7 @@ fn distribute_stake<T: Client>(
         match result {
             Ok(signature) => {
                 println!("Finalized transaction with signature {}", signature);
-                if !args.dry_run && !args.no_wait {
+                if !args.no_wait {
                     set_transaction_info(
                         db,
                         &allocation,
@@ -247,8 +247,12 @@ fn distribute_stake<T: Client>(
     Ok(())
 }
 
-fn open_db(path: &str) -> Result<PickleDb, pickledb::error::Error> {
-    let policy = PickleDbDumpPolicy::AutoDump;
+fn open_db(path: &str, dry_run: bool) -> Result<PickleDb, pickledb::error::Error> {
+    let policy = if dry_run {
+        PickleDbDumpPolicy::NeverDump
+    } else {
+        PickleDbDumpPolicy::AutoDump
+    };
     if Path::new(path).exists() {
         PickleDb::load_yaml(path, policy)
     } else {
@@ -332,7 +336,7 @@ pub fn process_distribute_tokens<T: Client>(
         );
     }
 
-    let mut db = open_db(&args.transactions_db)?;
+    let mut db = open_db(&args.transactions_db, args.dry_run)?;
     let still_finalizing = update_finalized_transactions(client, &mut db)?;
     if still_finalizing {
         eprintln!("Still finalizing transactions. Try again in 10 seconds");
@@ -500,7 +504,7 @@ pub fn process_distribute_stake<T: Client>(
         .map(|allocation| allocation.unwrap())
         .collect();
 
-    let mut db = open_db(&args.transactions_db)?;
+    let mut db = open_db(&args.transactions_db, args.dry_run)?;
     let still_finalizing = update_finalized_transactions(client, &mut db)?;
     if still_finalizing {
         eprintln!("Still finalizing transactions. Try again in 10 seconds");
@@ -593,7 +597,7 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
         dollars_per_sol: Some(0.22),
     };
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount =
@@ -610,7 +614,7 @@ pub fn test_process_distribute_bids_with_client<C: Client>(client: C, sender_key
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount =
@@ -666,7 +670,7 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(
         dollars_per_sol: None,
     };
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = sol_to_lamports(allocation.amount);
@@ -682,7 +686,7 @@ pub fn test_process_distribute_allocations_with_client<C: Client>(
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = sol_to_lamports(allocation.amount);
@@ -757,7 +761,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         transactions_db: transactions_db.clone(),
     };
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = sol_to_lamports(allocation.amount);
@@ -781,7 +785,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_stake(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
     let expected_amount = sol_to_lamports(allocation.amount);
