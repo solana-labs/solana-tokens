@@ -17,6 +17,7 @@ use solana_stake_program::{
     stake_instruction,
     stake_state::{Authorized, Lockup, StakeAuthorize},
 };
+use solana_transaction_status::TransactionStatus;
 use std::path::Path;
 use std::process;
 
@@ -332,7 +333,7 @@ pub fn process_distribute_tokens<T: Client>(
     }
 
     let mut db = open_db(&args.transactions_db)?;
-    let still_finalizing = update_finalized(client, &mut db)?;
+    let still_finalizing = update_finalized_transactions(client, &mut db)?;
     if still_finalizing {
         eprintln!("Still finalizing transactions. Try again in 10 seconds");
         process::exit(1);
@@ -416,8 +417,46 @@ pub fn process_distribute_tokens<T: Client>(
     Ok(())
 }
 
+fn update_finalized_transaction(
+    db: &mut PickleDb,
+    signature: &Signature,
+    opt_transaction_status: &Option<TransactionStatus>,
+) -> Result<bool, pickledb::error::Error> {
+    let mut still_finalizing = false;
+    if let Some(transaction_status) = opt_transaction_status {
+        if let Err(e) = &transaction_status.status {
+            eprintln!(
+                "Error in transaction with signature {}: {}",
+                signature,
+                e.to_string()
+            );
+            eprintln!("Discarding transaction record");
+            db.rem(&signature.to_string())?;
+            return Ok(false);
+        }
+        if transaction_status.confirmations.is_none() {
+            // Transaction is rooted. Set finalized in the database.
+            let mut transaction_info = db.get::<TransactionInfo>(&signature.to_string()).unwrap();
+            transaction_info.finalized = true;
+            db.set(&signature.to_string(), &transaction_info)?;
+        } else {
+            still_finalizing = true;
+        }
+    } else {
+        eprintln!(
+            "Signature not found {}. If its blockhash is expired, remove it from the database",
+            signature
+        );
+        still_finalizing = true;
+    }
+    Ok(still_finalizing)
+}
+
 // Update the finalized bit on any transactions that are now rooted
-fn update_finalized<T: Client>(client: &ThinClient<T>, db: &mut PickleDb) -> Result<bool, Error> {
+fn update_finalized_transactions<T: Client>(
+    client: &ThinClient<T>,
+    db: &mut PickleDb,
+) -> Result<bool, Error> {
     let transaction_data = read_transaction_data(db);
     let unconfirmed_signatures: Vec<_> = transaction_data
         .iter()
@@ -431,35 +470,11 @@ fn update_finalized<T: Client>(client: &ThinClient<T>, db: &mut PickleDb) -> Res
         .collect();
     let transaction_statuses = client.get_signature_statuses(&unconfirmed_signatures)?;
     let mut still_finalizing = false;
-    for (index, opt_transaction_status) in transaction_statuses.into_iter().enumerate() {
-        let signature = unconfirmed_signatures[index];
-        if let Some(transaction_status) = opt_transaction_status {
-            if let Err(e) = transaction_status.status {
-                eprintln!(
-                    "Error in transaction with signature {}: {}",
-                    signature,
-                    e.to_string()
-                );
-                eprintln!("Discarding transaction record");
-                db.rem(&signature.to_string())?;
-                continue;
-            }
-            if transaction_status.confirmations.is_none() {
-                let mut transaction_info =
-                    db.get::<TransactionInfo>(&signature.to_string()).unwrap();
-                // Transaction is rooted. Set finalized in the database.
-                transaction_info.finalized = true;
-                db.set(&signature.to_string(), &transaction_info)?;
-            } else {
-                still_finalizing = true;
-            }
-        } else {
-            eprintln!(
-                "Signature not found {}. If its blockhash is expired, remove it from the database",
-                signature
-            );
-            still_finalizing = true;
-        }
+    for (signature, opt_transaction_status) in unconfirmed_signatures
+        .into_iter()
+        .zip(transaction_statuses.into_iter())
+    {
+        still_finalizing |= update_finalized_transaction(db, &signature, &opt_transaction_status)?;
     }
     Ok(still_finalizing)
 }
@@ -477,7 +492,7 @@ pub fn process_distribute_stake<T: Client>(
         .collect();
 
     let mut db = open_db(&args.transactions_db)?;
-    let still_finalizing = update_finalized(client, &mut db)?;
+    let still_finalizing = update_finalized_transactions(client, &mut db)?;
     if still_finalizing {
         eprintln!("Still finalizing transactions. Try again in 10 seconds");
         process::exit(1);
