@@ -24,7 +24,6 @@ pub trait Client {
         &self,
         signatures: &[Signature],
     ) -> Result<Vec<Option<TransactionStatus>>>;
-    fn poll_for_signature1(&self, signature: &Signature) -> Result<()>;
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64>;
     fn get_recent_blockhash1(&self) -> Result<(Hash, FeeCalculator)>;
 }
@@ -50,11 +49,6 @@ impl Client for RpcClient {
             .map_err(|e| TransportError::Custom(e.to_string()))
     }
 
-    fn poll_for_signature1(&self, signature: &Signature) -> Result<()> {
-        self.poll_for_signature(signature)
-            .map_err(|e| TransportError::Custom(e.to_string()))
-    }
-
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
         self.get_balance(pubkey)
             .map_err(|e| TransportError::Custom(e.to_string()))
@@ -73,7 +67,7 @@ impl Client for BankClient {
 
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature> {
         let signature = self.async_send_transaction1(transaction)?;
-        self.poll_for_signature1(&signature)?;
+        self.poll_for_signature(&signature)?;
         Ok(signature)
     }
 
@@ -94,10 +88,6 @@ impl Client for BankClient {
                 })
             })
             .collect()
-    }
-
-    fn poll_for_signature1(&self, signature: &Signature) -> Result<()> {
-        self.poll_for_signature(signature)
     }
 
     fn get_balance1(&self, pubkey: &Pubkey) -> Result<u64> {
@@ -145,10 +135,6 @@ impl<C: Client> ThinClient<C> {
             system_instruction::transfer(&sender_keypair.pubkey(), &to_pubkey, lamports);
         let message = Message::new(&[create_instruction]);
         self.send_message(message, &[sender_keypair])
-    }
-
-    pub fn poll_for_signature(&self, signature: &Signature) -> Result<()> {
-        self.0.poll_for_signature1(signature)
     }
 
     pub fn get_recent_blockhash(&self) -> Result<(Hash, FeeCalculator)> {
