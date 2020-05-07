@@ -3,6 +3,7 @@ use crate::thin_client::{Client, ThinClient};
 use console::style;
 use csv::{ReaderBuilder, Trim};
 use indexmap::IndexMap;
+use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use solana_stake_program::{
     stake_state::{Authorized, Lockup, StakeAuthorize},
 };
 use solana_transaction_status::TransactionStatus;
-use std::{cmp, io, path::Path, process};
+use std::{cmp, io, path::Path, process, thread::sleep, time::Duration};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Bid {
@@ -195,29 +196,12 @@ fn distribute_tokens<T: Client>(
                 Some(&new_stake_account_address),
                 false,
             )?;
-            if args.no_wait {
-                client.async_send_transaction(transaction)
-            } else {
-                client.send_transaction(transaction)
-            }
+
+            client.async_send_transaction(transaction)
         };
-        match result {
-            Ok(signature) => {
-                println!("Finalized transaction with signature {}", signature);
-                if !args.no_wait {
-                    set_transaction_info(
-                        db,
-                        &allocation,
-                        &signature,
-                        Some(&new_stake_account_address),
-                        true,
-                    )?;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error sending tokens to {}: {}", allocation.recipient, e);
-            }
-        };
+        if let Err(e) = result {
+            eprintln!("Error sending tokens to {}: {}", allocation.recipient, e);
+        }
     }
     Ok(())
 }
@@ -303,6 +287,14 @@ fn read_allocations(
             .map(|entry| entry.unwrap())
             .collect()
     }
+}
+
+fn new_spinner_progress_bar() -> ProgressBar {
+    let progress_bar = ProgressBar::new(42);
+    progress_bar
+        .set_style(ProgressStyle::default_spinner().template("{spinner:.green} {wide_msg}"));
+    progress_bar.enable_steady_tick(100);
+    progress_bar
 }
 
 pub fn process_distribute_tokens<T: Client>(
@@ -407,8 +399,32 @@ pub fn process_distribute_tokens<T: Client>(
 
     distribute_tokens(client, &mut db, &allocations, args)?;
 
-    let confirmations = update_finalized_transactions(client, &mut db)?;
-    Ok(confirmations)
+    let mut opt_confirmations = update_finalized_transactions(client, &mut db)?;
+
+    if args.no_wait {
+        return Ok(opt_confirmations);
+    }
+
+    let mut retries = 15;
+    let progress_bar = new_spinner_progress_bar();
+
+    while opt_confirmations.is_some() && retries > 0 {
+        let confirmations = opt_confirmations.unwrap();
+        progress_bar.set_message(&format!(
+            "[{}/{}] Finalizing transactions",
+            confirmations, 32,
+        ));
+
+        // TODO: Delete this update_finalized_transactions() is updated to check blockhashes.
+        if confirmations == 0 {
+            retries -= 1;
+        }
+
+        // Sleep for about 1 slot
+        sleep(Duration::from_millis(500));
+        opt_confirmations = update_finalized_transactions(client, &mut db)?;
+    }
+    Ok(opt_confirmations)
 }
 
 // Set the finalized bit in the database if the transaction is rooted.
