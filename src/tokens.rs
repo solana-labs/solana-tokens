@@ -37,11 +37,11 @@ struct Allocation {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 struct TransactionInfo {
-    recipient: String,
+    recipient: Pubkey,
     amount: f64,
-    new_stake_account_address: String,
+    new_stake_account_address: Option<Pubkey>,
     finalized: bool,
-    blockhash: String,
+    blockhash: Hash,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
@@ -90,7 +90,7 @@ fn apply_previous_transactions(
     for transaction_info in transaction_infos {
         let mut amount = transaction_info.amount;
         for allocation in allocations.iter_mut() {
-            if allocation.recipient != transaction_info.recipient {
+            if allocation.recipient != transaction_info.recipient.to_string() {
                 continue;
             }
             if allocation.amount >= amount {
@@ -226,9 +226,9 @@ pub fn write_transaction_log<P: AsRef<Path>>(db: &PickleDb, path: &P) -> Result<
     let mut wtr = csv::WriterBuilder::new().from_path(path).unwrap();
     for (signature, info) in read_transaction_data(db) {
         let signed_info = SignedTransactionInfo {
-            recipient: info.recipient,
+            recipient: info.recipient.to_string(),
             amount: info.amount,
-            new_stake_account_address: info.new_stake_account_address,
+            new_stake_account_address: info.new_stake_account_address.map(|x| x.to_string()).unwrap_or_else(|| "".to_string()),
             finalized: info.finalized,
             signature: signature.to_string(),
         };
@@ -263,13 +263,11 @@ fn set_transaction_info(
     finalized: bool,
 ) -> Result<(), pickledb::error::Error> {
     let transaction_info = TransactionInfo {
-        recipient: allocation.recipient.clone(),
+        recipient: allocation.recipient.parse().unwrap(),
         amount: allocation.amount,
-        new_stake_account_address: new_stake_account_address
-            .map(|pubkey| pubkey.to_string())
-            .unwrap_or_else(|| "".to_string()),
+        new_stake_account_address: new_stake_account_address.cloned(),
         finalized,
-        blockhash: blockhash.to_string(),
+        blockhash: *blockhash,
     };
     db.set(&signature.to_string(), &transaction_info)?;
     Ok(())
@@ -487,7 +485,7 @@ fn update_finalized_transactions<T: Client>(
             if info.finalized {
                 None
             } else {
-                Some((*signature, info.blockhash.parse().unwrap()))
+                Some((*signature, info.blockhash))
             }
         })
         .collect();
@@ -600,7 +598,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
 
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
-    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
     assert_eq!(
         sol_to_lamports(transaction_infos[0].amount),
@@ -616,7 +614,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
     process_distribute_tokens(&thin_client, &args).unwrap();
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
-    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
     assert_eq!(
         sol_to_lamports(transaction_infos[0].amount),
@@ -699,7 +697,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
-    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
     assert_eq!(
         sol_to_lamports(transaction_infos[0].amount),
@@ -711,9 +709,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         sol_to_lamports(1.0),
     );
     let new_stake_account_address = transaction_infos[0]
-        .new_stake_account_address
-        .parse()
-        .unwrap();
+        .new_stake_account_address.unwrap();
     assert_eq!(
         thin_client.get_balance(&new_stake_account_address).unwrap(),
         expected_amount - sol_to_lamports(1.0),
@@ -723,7 +719,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     process_distribute_tokens(&thin_client, &args).unwrap();
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
-    assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());
+    assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
     assert_eq!(
         sol_to_lamports(transaction_infos[0].amount),
@@ -803,29 +799,31 @@ mod tests {
 
     #[test]
     fn test_apply_previous_transactions() {
+        let alice = Pubkey::new_rand();
+        let bob = Pubkey::new_rand();
         let mut allocations = vec![
             Allocation {
-                recipient: "a".to_string(),
+                recipient: alice.to_string(),
                 amount: 1.0,
             },
             Allocation {
-                recipient: "b".to_string(),
+                recipient: bob.to_string(),
                 amount: 1.0,
             },
         ];
         let transaction_infos = vec![TransactionInfo {
-            recipient: "b".to_string(),
+            recipient: bob,
             amount: 1.0,
-            new_stake_account_address: "".to_string(),
+            new_stake_account_address: None,
             finalized: true,
-            blockhash: Hash::default().to_string(),
+            blockhash: Hash::default(),
         }];
         apply_previous_transactions(&mut allocations, &transaction_infos);
         assert_eq!(allocations.len(), 1);
 
         // Ensure that we applied the transaction to the allocation with
-        // a matching recipient address (to "b", not "a").
-        assert_eq!(allocations[0].recipient, "a");
+        // a matching recipient address (to bob, not alice).
+        assert_eq!(allocations[0].recipient, alice.to_string());
     }
 
     #[test]
@@ -975,6 +973,7 @@ mod tests {
             rdr.deserialize().map(|entry| entry.unwrap()).collect();
 
         let signed_info = SignedTransactionInfo {
+            recipient: Pubkey::default().to_string(),
             signature: Signature::default().to_string(),
             ..SignedTransactionInfo::default()
         };
