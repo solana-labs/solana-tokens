@@ -347,13 +347,13 @@ pub fn process_distribute_tokens<T: Client>(
     let starting_total_tokens: f64 = allocations.iter().map(|x| x.amount).sum();
     println!(
         "{} ◎{}",
-        style("Total in allocations_csv:").bold(),
+        style("Total in input_csv:").bold(),
         starting_total_tokens,
     );
     if let Some(dollars_per_sol) = args.dollars_per_sol {
         println!(
             "{} ${}",
-            style("Total in allocations_csv:").bold(),
+            style("Total in input_csv:").bold(),
             starting_total_tokens * dollars_per_sol,
         );
     }
@@ -523,7 +523,7 @@ pub fn process_distribute_stake<T: Client>(
 ) -> Result<Option<usize>, Error> {
     let mut rdr = ReaderBuilder::new()
         .trim(Trim::All)
-        .from_path(&args.allocations_csv)?;
+        .from_path(&args.input_csv)?;
     let allocations: Vec<Allocation> = rdr
         .deserialize()
         .map(|allocation| allocation.unwrap())
@@ -697,9 +697,9 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         recipient: alice_pubkey.to_string(),
         amount: 1000.0,
     };
-    let allocations_file = NamedTempFile::new().unwrap();
-    let allocations_csv = allocations_file.path().to_str().unwrap().to_string();
-    let mut wtr = csv::WriterBuilder::new().from_writer(allocations_file);
+    let file = NamedTempFile::new().unwrap();
+    let input_csv = file.path().to_str().unwrap().to_string();
+    let mut wtr = csv::WriterBuilder::new().from_writer(file);
     wtr.serialize(&allocation).unwrap();
     wtr.flush().unwrap();
 
@@ -719,7 +719,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         dry_run: false,
         no_wait: false,
         sol_for_fees: 1.0,
-        allocations_csv,
+        input_csv,
         transactions_db: transactions_db.clone(),
     };
     let confirmations = process_distribute_stake(&thin_client, &args).unwrap();

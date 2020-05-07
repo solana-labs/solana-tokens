@@ -18,7 +18,7 @@ pub struct DistributeTokensArgs<P, K> {
 }
 
 pub struct DistributeStakeArgs<P, K> {
-    pub allocations_csv: String,
+    pub input_csv: String,
     pub transactions_db: String,
     pub dry_run: bool,
     pub no_wait: bool,
@@ -59,7 +59,7 @@ pub fn resolve_stake_args(
 ) -> Result<DistributeStakeArgs<Pubkey, Box<dyn Signer>>, Box<dyn Error>> {
     let matches = ArgMatches::default();
     let resolved_args = DistributeStakeArgs {
-        allocations_csv: args.allocations_csv,
+        input_csv: args.input_csv,
         transactions_db: args.transactions_db,
         dry_run: args.dry_run,
         no_wait: args.no_wait,
@@ -91,7 +91,9 @@ pub fn resolve_command(
         Command::DistributeTokens(args) => {
             let mut wallet_manager = maybe_wallet_manager()?;
             let matches = ArgMatches::default();
-            let resolved_stake_args = args.stake_args.map(|args| resolve_stake_args(&mut wallet_manager, args));
+            let resolved_stake_args = args
+                .stake_args
+                .map(|args| resolve_stake_args(&mut wallet_manager, args));
             let resolved_args = DistributeTokensArgs {
                 input_csv: args.input_csv,
                 from_bids: args.from_bids,

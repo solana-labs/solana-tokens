@@ -108,8 +108,8 @@ where
                         .help("Transactions database file"),
                 )
                 .arg(
-                    Arg::with_name("allocations_csv")
-                        .long("allocations-csv")
+                    Arg::with_name("input_csv")
+                        .long("input-csv")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
@@ -231,7 +231,7 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
 
 fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeStakeArgs<String, String> {
     DistributeStakeArgs {
-        allocations_csv: value_t_or_exit!(matches, "allocations_csv", String),
+        input_csv: value_t_or_exit!(matches, "input_csv", String),
         transactions_db: value_t_or_exit!(matches, "transactions_db", String),
         dry_run: matches.is_present("dry_run"),
         no_wait: matches.is_present("no_wait"),
