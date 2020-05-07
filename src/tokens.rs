@@ -50,7 +50,6 @@ struct SignedTransactionInfo {
     amount: f64,
     new_stake_account_address: String,
     finalized: bool,
-    blockhash: String,
     signature: String,
 }
 
@@ -231,7 +230,6 @@ pub fn write_transaction_log<P: AsRef<Path>>(db: &PickleDb, path: &P) -> Result<
             amount: info.amount,
             new_stake_account_address: info.new_stake_account_address,
             finalized: info.finalized,
-            blockhash: info.blockhash,
             signature: signature.to_string(),
         };
         wtr.serialize(&signed_info)?;
