@@ -1,8 +1,8 @@
 use clap::ArgMatches;
 use solana_clap_utils::keypair::{pubkey_from_path, signer_from_path};
-use solana_remote_wallet::remote_wallet::maybe_wallet_manager;
+use solana_remote_wallet::remote_wallet::{maybe_wallet_manager, RemoteWalletManager};
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 pub struct DistributeTokensArgs<K> {
     pub input_csv: String,
@@ -52,6 +52,37 @@ pub struct Args<P, K> {
     pub command: Command<P, K>,
 }
 
+pub fn resolve_distribute_stake_args(
+    wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
+    args: DistributeStakeArgs<String, String>,
+) -> Result<DistributeStakeArgs<Pubkey, Box<dyn Signer>>, Box<dyn Error>> {
+    let matches = ArgMatches::default();
+    let resolved_args = DistributeStakeArgs {
+        allocations_csv: args.allocations_csv,
+        transactions_db: args.transactions_db,
+        dry_run: args.dry_run,
+        no_wait: args.no_wait,
+        stake_account_address: pubkey_from_path(
+            &matches,
+            &args.stake_account_address,
+            "stake account address",
+            wallet_manager,
+        )
+        .unwrap(),
+        sol_for_fees: args.sol_for_fees,
+        stake_authority: args.stake_authority.as_ref().map(|key_url| {
+            signer_from_path(&matches, &key_url, "stake authority", wallet_manager).unwrap()
+        }),
+        withdraw_authority: args.withdraw_authority.as_ref().map(|key_url| {
+            signer_from_path(&matches, &key_url, "withdraw authority", wallet_manager).unwrap()
+        }),
+        fee_payer: args.fee_payer.as_ref().map(|key_url| {
+            signer_from_path(&matches, &key_url, "fee-payer", wallet_manager).unwrap()
+        }),
+    };
+    Ok(resolved_args)
+}
+
 pub fn resolve_command(
     command: Command<String, String>,
 ) -> Result<Command<Pubkey, Box<dyn Signer>>, Box<dyn Error>> {
@@ -78,37 +109,7 @@ pub fn resolve_command(
         }
         Command::DistributeStake(args) => {
             let mut wallet_manager = maybe_wallet_manager()?;
-            let matches = ArgMatches::default();
-            let resolved_args = DistributeStakeArgs {
-                allocations_csv: args.allocations_csv,
-                transactions_db: args.transactions_db,
-                dry_run: args.dry_run,
-                no_wait: args.no_wait,
-                stake_account_address: pubkey_from_path(
-                    &matches,
-                    &args.stake_account_address,
-                    "stake account address",
-                    &mut wallet_manager,
-                )
-                .unwrap(),
-                sol_for_fees: args.sol_for_fees,
-                stake_authority: args.stake_authority.as_ref().map(|key_url| {
-                    signer_from_path(&matches, &key_url, "stake authority", &mut wallet_manager)
-                        .unwrap()
-                }),
-                withdraw_authority: args.withdraw_authority.as_ref().map(|key_url| {
-                    signer_from_path(
-                        &matches,
-                        &key_url,
-                        "withdraw authority",
-                        &mut wallet_manager,
-                    )
-                    .unwrap()
-                }),
-                fee_payer: args.fee_payer.as_ref().map(|key_url| {
-                    signer_from_path(&matches, &key_url, "fee-payer", &mut wallet_manager).unwrap()
-                }),
-            };
+            let resolved_args = resolve_distribute_stake_args(&mut wallet_manager, args)?;
             Ok(Command::DistributeStake(resolved_args))
         }
         Command::Balances(args) => Ok(Command::Balances(args)),
