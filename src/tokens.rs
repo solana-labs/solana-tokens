@@ -115,76 +115,21 @@ fn distribute_tokens<T: Client>(
     allocations: &[Allocation],
     args: &DistributeTokensArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), Error> {
-    if args.stake_args.is_some() {
-        return distribute_stake(client, db, allocations, args);
-    }
-
-    let signers = if args.dry_run {
-        vec![]
-    } else {
-        let signers = vec![
-            &**args.sender_keypair.as_ref().unwrap(),
-            &**args.fee_payer.as_ref().unwrap(),
-        ];
-        unique_signers(signers)
-    };
-
-    for allocation in allocations {
-        println!("{:<44}  {:>24.9}", allocation.recipient, allocation.amount);
-        let result = if args.dry_run {
-            Ok(Signature::default())
-        } else {
-            let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
-            let from = args.sender_keypair.as_ref().unwrap().pubkey();
-            let to = allocation.recipient.parse().unwrap();
-            let lamports = sol_to_lamports(allocation.amount);
-            let instruction = system_instruction::transfer(&from, &to, lamports);
-            let message = Message::new_with_payer(&[instruction], Some(&fee_payer_pubkey));
-            let (blockhash, _fee_caluclator) = client.get_recent_blockhash()?;
-            let transaction = Transaction::new(&signers, message, blockhash);
-            let signature = transaction.signatures[0];
-            set_transaction_info(db, &allocation, &signature, None, false)?;
-            if args.no_wait {
-                client.async_send_transaction(transaction)
-            } else {
-                client.send_transaction(transaction)
-            }
-        };
-        match result {
-            Ok(signature) => {
-                println!("Finalized transaction with signature {}", signature);
-                if !args.no_wait {
-                    set_transaction_info(db, &allocation, &signature, None, true)?;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error sending tokens to {}: {}", allocation.recipient, e);
-            }
-        };
-    }
-    Ok(())
-}
-
-fn distribute_stake<T: Client>(
-    client: &ThinClient<T>,
-    db: &mut PickleDb,
-    allocations: &[Allocation],
-    args: &DistributeTokensArgs<Pubkey, Box<dyn Signer>>,
-) -> Result<(), Error> {
-    let stake_args = args.stake_args.as_ref().unwrap();
     for allocation in allocations {
         let new_stake_account_keypair = Keypair::new();
         let new_stake_account_address = new_stake_account_keypair.pubkey();
         let signers = if args.dry_run {
             vec![]
         } else {
-            let signers = vec![
+            let mut signers = vec![
                 &**args.fee_payer.as_ref().unwrap(),
                 &**args.sender_keypair.as_ref().unwrap(),
-                &**stake_args.stake_authority.as_ref().unwrap(),
-                &**stake_args.withdraw_authority.as_ref().unwrap(),
-                &new_stake_account_keypair,
             ];
+            if let Some(stake_args) = &args.stake_args {
+                signers.push(&**stake_args.stake_authority.as_ref().unwrap());
+                signers.push(&**stake_args.withdraw_authority.as_ref().unwrap());
+                signers.push(&new_stake_account_keypair);
+            }
             unique_signers(signers)
         };
 
@@ -192,43 +137,53 @@ fn distribute_stake<T: Client>(
         let result = if args.dry_run {
             Ok(Signature::default())
         } else {
-            let system_sol = stake_args.sol_for_fees;
+            let instructions = if let Some(stake_args) = &args.stake_args {
+                let sol_for_fees = stake_args.sol_for_fees;
+                let sender_pubkey = args.sender_keypair.as_ref().unwrap().pubkey();
+                let stake_authority = stake_args.stake_authority.as_ref().unwrap().pubkey();
+                let withdraw_authority = stake_args.withdraw_authority.as_ref().unwrap().pubkey();
+
+                let mut instructions = stake_instruction::split(
+                    &stake_args.stake_account_address,
+                    &stake_authority,
+                    sol_to_lamports(allocation.amount - sol_for_fees),
+                    &new_stake_account_address,
+                );
+
+                let recipient = allocation.recipient.parse().unwrap();
+
+                // Make the recipient the new stake authority
+                instructions.push(stake_instruction::authorize(
+                    &new_stake_account_address,
+                    &stake_authority,
+                    &recipient,
+                    StakeAuthorize::Staker,
+                ));
+
+                // Make the recipient the new withdraw authority
+                instructions.push(stake_instruction::authorize(
+                    &new_stake_account_address,
+                    &withdraw_authority,
+                    &recipient,
+                    StakeAuthorize::Withdrawer,
+                ));
+
+                instructions.push(system_instruction::transfer(
+                    &sender_pubkey,
+                    &recipient,
+                    sol_to_lamports(sol_for_fees),
+                ));
+
+                instructions
+            } else {
+                let from = args.sender_keypair.as_ref().unwrap().pubkey();
+                let to = allocation.recipient.parse().unwrap();
+                let lamports = sol_to_lamports(allocation.amount);
+                let instruction = system_instruction::transfer(&from, &to, lamports);
+                vec![instruction]
+            };
+
             let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
-            let sender_pubkey = args.sender_keypair.as_ref().unwrap().pubkey();
-            let stake_authority = stake_args.stake_authority.as_ref().unwrap().pubkey();
-            let withdraw_authority = stake_args.withdraw_authority.as_ref().unwrap().pubkey();
-
-            let mut instructions = stake_instruction::split(
-                &stake_args.stake_account_address,
-                &stake_authority,
-                sol_to_lamports(allocation.amount - system_sol),
-                &new_stake_account_address,
-            );
-
-            let recipient = allocation.recipient.parse().unwrap();
-
-            // Make the recipient the new stake authority
-            instructions.push(stake_instruction::authorize(
-                &new_stake_account_address,
-                &stake_authority,
-                &recipient,
-                StakeAuthorize::Staker,
-            ));
-
-            // Make the recipient the new withdraw authority
-            instructions.push(stake_instruction::authorize(
-                &new_stake_account_address,
-                &withdraw_authority,
-                &recipient,
-                StakeAuthorize::Withdrawer,
-            ));
-
-            instructions.push(system_instruction::transfer(
-                &sender_pubkey,
-                &recipient,
-                sol_to_lamports(system_sol),
-            ));
-
             let message = Message::new_with_payer(&instructions, Some(&fee_payer_pubkey));
             let (blockhash, _fee_caluclator) = client.get_recent_blockhash()?;
             let transaction = Transaction::new(&signers, message, blockhash);
