@@ -35,13 +35,27 @@ struct Allocation {
     amount: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct TransactionInfo {
     recipient: Pubkey,
     amount: f64,
     new_stake_account_address: Option<Pubkey>,
     finalized: bool,
-    blockhash: Hash,
+    transaction: Transaction,
+}
+
+impl Default for TransactionInfo {
+    fn default() -> Self {
+        let mut transaction = Transaction::new_unsigned_instructions(vec![]);
+        transaction.signatures.push(Signature::default());
+        Self {
+            recipient: Pubkey::default(),
+            amount: 0.0,
+            new_stake_account_address: None,
+            finalized: false,
+            transaction,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
@@ -63,6 +77,8 @@ pub enum Error {
     PickleDbError(#[from] pickledb::error::Error),
     #[error("Transport error")]
     TransportError(#[from] TransportError),
+    #[error("Signature not found")]
+    SignatureNotFound,
 }
 
 fn unique_signers(signers: Vec<&dyn Signer>) -> Vec<&dyn Signer> {
@@ -190,12 +206,10 @@ fn distribute_tokens<T: Client>(
             let message = Message::new_with_payer(&instructions, Some(&fee_payer_pubkey));
             let (blockhash, _fee_caluclator) = client.get_recent_blockhash()?;
             let transaction = Transaction::new(&signers, message, blockhash);
-            let signature = transaction.signatures[0];
             set_transaction_info(
                 db,
                 &allocation,
-                &signature,
-                &blockhash,
+                &transaction,
                 Some(&new_stake_account_address),
                 false,
             )?;
@@ -224,28 +238,20 @@ fn open_db(path: &str, dry_run: bool) -> Result<PickleDb, pickledb::error::Error
 
 pub fn write_transaction_log<P: AsRef<Path>>(db: &PickleDb, path: &P) -> Result<(), io::Error> {
     let mut wtr = csv::WriterBuilder::new().from_path(path).unwrap();
-    for (signature, info) in read_transaction_data(db) {
+    for info in read_transaction_infos(db) {
         let signed_info = SignedTransactionInfo {
             recipient: info.recipient.to_string(),
             amount: info.amount,
-            new_stake_account_address: info.new_stake_account_address.map(|x| x.to_string()).unwrap_or_else(|| "".to_string()),
+            new_stake_account_address: info
+                .new_stake_account_address
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "".to_string()),
             finalized: info.finalized,
-            signature: signature.to_string(),
+            signature: info.transaction.signatures[0].to_string(),
         };
         wtr.serialize(&signed_info)?;
     }
     wtr.flush()
-}
-
-fn read_transaction_data(db: &PickleDb) -> Vec<(Signature, TransactionInfo)> {
-    db.iter()
-        .map(|kv| {
-            (
-                kv.get_key().parse().unwrap(),
-                kv.get_value::<TransactionInfo>().unwrap(),
-            )
-        })
-        .collect()
 }
 
 fn read_transaction_infos(db: &PickleDb) -> Vec<TransactionInfo> {
@@ -257,8 +263,7 @@ fn read_transaction_infos(db: &PickleDb) -> Vec<TransactionInfo> {
 fn set_transaction_info(
     db: &mut PickleDb,
     allocation: &Allocation,
-    signature: &Signature,
-    blockhash: &Hash,
+    transaction: &Transaction,
     new_stake_account_address: Option<&Pubkey>,
     finalized: bool,
 ) -> Result<(), pickledb::error::Error> {
@@ -267,8 +272,9 @@ fn set_transaction_info(
         amount: allocation.amount,
         new_stake_account_address: new_stake_account_address.cloned(),
         finalized,
-        blockhash: *blockhash,
+        transaction: transaction.clone(),
     };
+    let signature = transaction.signatures[0];
     db.set(&signature.to_string(), &transaction_info)?;
     Ok(())
 }
@@ -322,10 +328,9 @@ pub fn process_distribute_tokens<T: Client>(
     }
 
     let mut db = open_db(&args.transactions_db, args.dry_run)?;
-    let confirmations = update_finalized_transactions(client, &mut db)?;
-    if confirmations.is_some() {
-        eprintln!("warning: unfinalized transactions");
-    }
+
+    // Start by finalizing any transactions from the previous run.
+    let confirmations = finalize_transactions(client, &mut db, args.dry_run, args.no_wait)?;
 
     let transaction_infos = read_transaction_infos(&db);
     apply_previous_transactions(&mut allocations, &transaction_infos);
@@ -402,25 +407,44 @@ pub fn process_distribute_tokens<T: Client>(
 
     distribute_tokens(client, &mut db, &allocations, args)?;
 
-    let mut opt_confirmations = update_finalized_transactions(client, &mut db)?;
+    finalize_transactions(client, &mut db, args.dry_run, args.no_wait)
+}
 
-    if args.no_wait {
+fn finalize_transactions<T: Client>(
+    client: &ThinClient<T>,
+    db: &mut PickleDb,
+    dry_run: bool,
+    no_wait: bool,
+) -> Result<Option<usize>, Error> {
+    let (mut opt_confirmations, mut unconfirmed_transactions) =
+        update_finalized_transactions(client, db)?;
+
+    if no_wait {
         return Ok(opt_confirmations);
     }
 
     let progress_bar = new_spinner_progress_bar();
 
-    while opt_confirmations.is_some() {
+    while opt_confirmations.is_some() || !unconfirmed_transactions.is_empty() {
         let confirmations = opt_confirmations.unwrap();
         progress_bar.set_message(&format!(
             "[{}/{}] Finalizing transactions",
             confirmations, 32,
         ));
 
+        if !dry_run {
+            for transaction in unconfirmed_transactions {
+                client.async_send_transaction(transaction)?;
+            }
+        }
+
         // Sleep for about 1 slot
         sleep(Duration::from_millis(500));
-        opt_confirmations = update_finalized_transactions(client, &mut db)?;
+        let (opt_conf, unconfirmed) = update_finalized_transactions(client, db)?;
+        opt_confirmations = opt_conf;
+        unconfirmed_transactions = unconfirmed;
     }
+
     Ok(opt_confirmations)
 }
 
@@ -433,18 +457,17 @@ fn update_finalized_transaction(
     opt_transaction_status: Option<TransactionStatus>,
     blockhash: &Hash,
     recent_blockhashes: &[Hash],
-) -> Result<Option<usize>, pickledb::error::Error> {
+) -> Result<Option<usize>, Error> {
     if opt_transaction_status.is_none() {
         if !recent_blockhashes.contains(blockhash) {
             eprintln!("Signature not found {} and blockhash expired", signature);
             println!("Discarding transaction record");
             db.rem(&signature.to_string())?;
-            return Ok(None); // TODO: return an error here?
+            return Ok(None);
         }
 
-        // Return 0 because the transaction might still be in flight and get accepted onto
-        // the ledger.
-        return Ok(Some(0));
+        // Return an error to signal the option resend the transaction.
+        return Err(Error::SignatureNotFound);
     }
     let transaction_status = opt_transaction_status.unwrap();
 
@@ -474,44 +497,54 @@ fn update_finalized_transaction(
 
 // Update the finalized bit on any transactions that are now rooted
 // Return the lowest number of confirmations on the unfinalized transactions or None if all are finalized.
+// Also return the unconfirmed transactions with valid blockhashes.
 fn update_finalized_transactions<T: Client>(
     client: &ThinClient<T>,
     db: &mut PickleDb,
-) -> Result<Option<usize>, Error> {
-    let transaction_data = read_transaction_data(db);
-    let unconfirmed_signatures_and_blockhashes: Vec<_> = transaction_data
+) -> Result<(Option<usize>, Vec<Transaction>), Error> {
+    let transaction_infos = read_transaction_infos(db);
+    let unconfirmed_transactions: Vec<_> = transaction_infos
         .iter()
-        .filter_map(|(signature, info)| {
+        .filter_map(|info| {
             if info.finalized {
                 None
             } else {
-                Some((*signature, info.blockhash))
+                Some(&info.transaction)
             }
         })
         .collect();
-    let unconfirmed_signatures = unconfirmed_signatures_and_blockhashes
+    let unconfirmed_signatures = unconfirmed_transactions
         .iter()
-        .map(|(sig, _)| *sig)
+        .map(|tx| tx.signatures[0])
         .collect_vec();
     let transaction_statuses = client.get_signature_statuses(&unconfirmed_signatures)?;
     let recent_blockhashes = client.get_recent_blockhashes()?;
 
     let mut confirmations = None;
-    for ((signature, blockhash), opt_transaction_status) in unconfirmed_signatures_and_blockhashes
+    let mut mia_transactions = vec![];
+    for (transaction, opt_transaction_status) in unconfirmed_transactions
         .into_iter()
         .zip(transaction_statuses.into_iter())
     {
-        if let Some(confs) = update_finalized_transaction(
+        match update_finalized_transaction(
             db,
-            &signature,
+            &transaction.signatures[0],
             opt_transaction_status,
-            &blockhash,
+            &transaction.message.recent_blockhash,
             &recent_blockhashes,
-        )? {
-            confirmations = Some(cmp::min(confs, confirmations.unwrap_or(usize::MAX)));
+        ) {
+            Ok(Some(confs)) => {
+                confirmations = Some(cmp::min(confs, confirmations.unwrap_or(usize::MAX)));
+            }
+            Err(Error::SignatureNotFound) => {
+                mia_transactions.push(transaction.clone());
+            }
+            result => {
+                result?;
+            }
         }
     }
-    Ok(confirmations)
+    Ok((confirmations, mia_transactions))
 }
 
 pub fn process_balances<T: Client>(
@@ -708,8 +741,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         thin_client.get_balance(&alice_pubkey).unwrap(),
         sol_to_lamports(1.0),
     );
-    let new_stake_account_address = transaction_infos[0]
-        .new_stake_account_address.unwrap();
+    let new_stake_account_address = transaction_infos[0].new_stake_account_address.unwrap();
     assert_eq!(
         thin_client.get_balance(&new_stake_account_address).unwrap(),
         expected_amount - sol_to_lamports(1.0),
@@ -816,7 +848,7 @@ mod tests {
             amount: 1.0,
             new_stake_account_address: None,
             finalized: true,
-            blockhash: Hash::default(),
+            transaction: Transaction::new_unsigned_instructions(vec![]),
         }];
         apply_previous_transactions(&mut allocations, &transaction_infos);
         assert_eq!(allocations.len(), 1);
@@ -835,11 +867,11 @@ mod tests {
         let blockhash = Hash::default();
         let transaction_info = TransactionInfo::default();
         db.set(&signature.to_string(), &transaction_info).unwrap();
-        assert_eq!(
+        assert!(matches!(
             update_finalized_transaction(&mut db, &signature, None, &blockhash, &[blockhash])
-                .unwrap(),
-            Some(0)
-        );
+                .unwrap_err(),
+            Error::SignatureNotFound
+        ));
 
         // Unchanged
         assert_eq!(
