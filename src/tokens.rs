@@ -1,4 +1,4 @@
-use crate::args::{BalancesArgs, DistributeStakeArgs, DistributeTokensArgs, PrintDbArgs};
+use crate::args::{BalancesArgs, DistributeTokensArgs, PrintDbArgs, StakeArgs};
 use crate::thin_client::{Client, ThinClient};
 use console::style;
 use csv::{ReaderBuilder, Trim};
@@ -110,6 +110,10 @@ fn distribute_tokens<T: Client>(
     allocations: &[Allocation],
     args: &DistributeTokensArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), Error> {
+    if args.stake_args.is_some() {
+        return distribute_stake(client, db, allocations, args);
+    }
+
     let signers = if args.dry_run {
         vec![]
     } else {
@@ -160,8 +164,9 @@ fn distribute_stake<T: Client>(
     client: &ThinClient<T>,
     db: &mut PickleDb,
     allocations: &[Allocation],
-    args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
+    args: &DistributeTokensArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), Error> {
+    let stake_args = args.stake_args.as_ref().unwrap();
     for allocation in allocations {
         let new_stake_account_keypair = Keypair::new();
         let new_stake_account_address = new_stake_account_keypair.pubkey();
@@ -170,8 +175,8 @@ fn distribute_stake<T: Client>(
         } else {
             vec![
                 &**args.fee_payer.as_ref().unwrap(),
-                &**args.stake_authority.as_ref().unwrap(),
-                &**args.withdraw_authority.as_ref().unwrap(),
+                &**stake_args.stake_authority.as_ref().unwrap(),
+                &**stake_args.withdraw_authority.as_ref().unwrap(),
                 &new_stake_account_keypair,
             ]
         };
@@ -180,13 +185,13 @@ fn distribute_stake<T: Client>(
         let result = if args.dry_run {
             Ok(Signature::default())
         } else {
-            let system_sol = args.sol_for_fees;
+            let system_sol = stake_args.sol_for_fees;
             let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
-            let stake_authority = args.stake_authority.as_ref().unwrap().pubkey();
-            let withdraw_authority = args.withdraw_authority.as_ref().unwrap().pubkey();
+            let stake_authority = stake_args.stake_authority.as_ref().unwrap().pubkey();
+            let withdraw_authority = stake_args.withdraw_authority.as_ref().unwrap().pubkey();
 
             let mut instructions = stake_instruction::split(
-                &args.stake_account_address,
+                &stake_args.stake_account_address,
                 &stake_authority,
                 sol_to_lamports(allocation.amount - system_sol),
                 &new_stake_account_address,
@@ -382,7 +387,7 @@ pub fn process_distribute_tokens<T: Client>(
     for allocation in &allocations {
         let address = allocation.recipient.parse().unwrap();
         let balance = client.get_balance(&address).unwrap();
-        if !args.force && balance != 0 {
+        if args.stake_args.is_none() && !args.force && balance != 0 {
             eprintln!(
                 "Error: Non-zero balance {}, refusing to send {} to {}",
                 lamports_to_sol(balance),
@@ -514,39 +519,6 @@ fn update_finalized_transactions<T: Client>(
             confirmations = Some(cmp::min(confs, confirmations.unwrap_or(usize::MAX)));
         }
     }
-    Ok(confirmations)
-}
-
-pub fn process_distribute_stake<T: Client>(
-    client: &ThinClient<T>,
-    args: &DistributeStakeArgs<Pubkey, Box<dyn Signer>>,
-) -> Result<Option<usize>, Error> {
-    let mut rdr = ReaderBuilder::new()
-        .trim(Trim::All)
-        .from_path(&args.input_csv)?;
-    let allocations: Vec<Allocation> = rdr
-        .deserialize()
-        .map(|allocation| allocation.unwrap())
-        .collect();
-
-    let mut db = open_db(&args.transactions_db, args.dry_run)?;
-    let confirmations = update_finalized_transactions(client, &mut db)?;
-    if confirmations.is_some() {
-        eprintln!("warning: unfinalized transactions");
-    }
-
-    let mut allocations = merge_allocations(&allocations);
-    let transaction_infos = read_transaction_infos(&db);
-    apply_previous_transactions(&mut allocations, &transaction_infos);
-
-    if allocations.is_empty() {
-        eprintln!("No work to do");
-        return Ok(confirmations);
-    }
-
-    distribute_stake(client, &mut db, &allocations, args)?;
-
-    let confirmations = update_finalized_transactions(client, &mut db)?;
     Ok(confirmations)
 }
 
@@ -711,18 +683,25 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         .unwrap()
         .to_string();
 
-    let args: DistributeStakeArgs<Pubkey, Box<dyn Signer>> = DistributeStakeArgs {
+    let stake_args: StakeArgs<Pubkey, Box<dyn Signer>> = StakeArgs {
         stake_account_address,
         stake_authority: Some(Box::new(stake_authority)),
         withdraw_authority: Some(Box::new(withdraw_authority)),
+        sol_for_fees: 1.0,
+    };
+    let args: DistributeTokensArgs<Pubkey, Box<dyn Signer>> = DistributeTokensArgs {
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
         no_wait: false,
-        sol_for_fees: 1.0,
         input_csv,
         transactions_db: transactions_db.clone(),
+        stake_args: Some(stake_args),
+        force: false,
+        from_bids: false,
+        sender_keypair: None,
+        dollars_per_sol: None,
     };
-    let confirmations = process_distribute_stake(&thin_client, &args).unwrap();
+    let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();
     assert_eq!(confirmations, None);
 
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
@@ -748,7 +727,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     );
 
     // Now, run it again, and check there's no double-spend.
-    process_distribute_stake(&thin_client, &args).unwrap();
+    process_distribute_tokens(&thin_client, &args).unwrap();
     let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey.to_string());

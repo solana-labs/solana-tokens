@@ -1,6 +1,4 @@
-use crate::args::{
-    Args, BalancesArgs, Command, DistributeStakeArgs, DistributeTokensArgs, PrintDbArgs,
-};
+use crate::args::{Args, BalancesArgs, Command, DistributeTokensArgs, PrintDbArgs, StakeArgs};
 use clap::{value_t, value_t_or_exit, App, Arg, ArgMatches, SubCommand};
 use solana_clap_utils::input_validators::{is_valid_pubkey, is_valid_signer};
 use solana_cli_config::CONFIG_FILE;
@@ -230,16 +228,11 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
 }
 
 fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs<String, String> {
-    let stake_args = DistributeStakeArgs {
-        input_csv: value_t_or_exit!(matches, "input_csv", String),
-        transactions_db: value_t_or_exit!(matches, "transactions_db", String),
-        dry_run: matches.is_present("dry_run"),
-        no_wait: matches.is_present("no_wait"),
+    let stake_args = StakeArgs {
         stake_account_address: value_t_or_exit!(matches, "stake_account_address", String),
         sol_for_fees: value_t_or_exit!(matches, "sol_for_fees", f64),
         stake_authority: value_t!(matches, "stake_authority", String).ok(),
         withdraw_authority: value_t!(matches, "withdraw_authority", String).ok(),
-        fee_payer: value_t!(matches, "fee_payer", String).ok(),
     };
     DistributeTokensArgs {
         input_csv: value_t_or_exit!(matches, "input_csv", String),

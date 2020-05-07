@@ -14,19 +14,14 @@ pub struct DistributeTokensArgs<P, K> {
     pub sender_keypair: Option<K>,
     pub fee_payer: Option<K>,
     pub force: bool,
-    pub stake_args: Option<DistributeStakeArgs<P, K>>,
+    pub stake_args: Option<StakeArgs<P, K>>,
 }
 
-pub struct DistributeStakeArgs<P, K> {
-    pub input_csv: String,
-    pub transactions_db: String,
-    pub dry_run: bool,
-    pub no_wait: bool,
+pub struct StakeArgs<P, K> {
     pub sol_for_fees: f64,
     pub stake_account_address: P,
     pub stake_authority: Option<K>,
     pub withdraw_authority: Option<K>,
-    pub fee_payer: Option<K>,
 }
 
 pub struct BalancesArgs {
@@ -54,14 +49,10 @@ pub struct Args<P, K> {
 
 pub fn resolve_stake_args(
     wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
-    args: DistributeStakeArgs<String, String>,
-) -> Result<DistributeStakeArgs<Pubkey, Box<dyn Signer>>, Box<dyn Error>> {
+    args: StakeArgs<String, String>,
+) -> Result<StakeArgs<Pubkey, Box<dyn Signer>>, Box<dyn Error>> {
     let matches = ArgMatches::default();
-    let resolved_args = DistributeStakeArgs {
-        input_csv: args.input_csv,
-        transactions_db: args.transactions_db,
-        dry_run: args.dry_run,
-        no_wait: args.no_wait,
+    let resolved_args = StakeArgs {
         stake_account_address: pubkey_from_path(
             &matches,
             &args.stake_account_address,
@@ -75,9 +66,6 @@ pub fn resolve_stake_args(
         }),
         withdraw_authority: args.withdraw_authority.as_ref().map(|key_url| {
             signer_from_path(&matches, &key_url, "withdraw authority", wallet_manager).unwrap()
-        }),
-        fee_payer: args.fee_payer.as_ref().map(|key_url| {
-            signer_from_path(&matches, &key_url, "fee-payer", wallet_manager).unwrap()
         }),
     };
     Ok(resolved_args)
