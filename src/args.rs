@@ -4,7 +4,7 @@ use solana_remote_wallet::remote_wallet::{maybe_wallet_manager, RemoteWalletMana
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
 use std::{error::Error, sync::Arc};
 
-pub struct DistributeTokensArgs<K> {
+pub struct DistributeTokensArgs<P, K> {
     pub input_csv: String,
     pub from_bids: bool,
     pub transactions_db: String,
@@ -14,6 +14,7 @@ pub struct DistributeTokensArgs<K> {
     pub sender_keypair: Option<K>,
     pub fee_payer: Option<K>,
     pub force: bool,
+    pub stake_args: Option<DistributeStakeArgs<P, K>>,
 }
 
 pub struct DistributeStakeArgs<P, K> {
@@ -40,7 +41,7 @@ pub struct PrintDbArgs {
 }
 
 pub enum Command<P, K> {
-    DistributeTokens(DistributeTokensArgs<K>),
+    DistributeTokens(DistributeTokensArgs<P, K>),
     DistributeStake(DistributeStakeArgs<P, K>),
     Balances(BalancesArgs),
     PrintDb(PrintDbArgs),
@@ -52,7 +53,7 @@ pub struct Args<P, K> {
     pub command: Command<P, K>,
 }
 
-pub fn resolve_distribute_stake_args(
+pub fn resolve_stake_args(
     wallet_manager: &mut Option<Arc<RemoteWalletManager>>,
     args: DistributeStakeArgs<String, String>,
 ) -> Result<DistributeStakeArgs<Pubkey, Box<dyn Signer>>, Box<dyn Error>> {
@@ -90,6 +91,7 @@ pub fn resolve_command(
         Command::DistributeTokens(args) => {
             let mut wallet_manager = maybe_wallet_manager()?;
             let matches = ArgMatches::default();
+            let resolved_stake_args = args.stake_args.map(|args| resolve_stake_args(&mut wallet_manager, args));
             let resolved_args = DistributeTokensArgs {
                 input_csv: args.input_csv,
                 from_bids: args.from_bids,
@@ -104,12 +106,13 @@ pub fn resolve_command(
                     signer_from_path(&matches, &key_url, "fee-payer", &mut wallet_manager).unwrap()
                 }),
                 force: args.force,
+                stake_args: resolved_stake_args.map_or(Ok(None), |r| r.map(Some))?,
             };
             Ok(Command::DistributeTokens(resolved_args))
         }
         Command::DistributeStake(args) => {
             let mut wallet_manager = maybe_wallet_manager()?;
-            let resolved_args = resolve_distribute_stake_args(&mut wallet_manager, args)?;
+            let resolved_args = resolve_stake_args(&mut wallet_manager, args)?;
             Ok(Command::DistributeStake(resolved_args))
         }
         Command::Balances(args) => Ok(Command::Balances(args)),

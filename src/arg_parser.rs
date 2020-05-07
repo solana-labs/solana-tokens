@@ -214,7 +214,7 @@ where
         .get_matches_from(args)
 }
 
-fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs<String> {
+fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs<String, String> {
     DistributeTokensArgs {
         input_csv: value_t_or_exit!(matches, "input_csv", String),
         from_bids: matches.is_present("from_bids"),
@@ -225,6 +225,7 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
         sender_keypair: value_t!(matches, "sender_keypair", String).ok(),
         fee_payer: value_t!(matches, "fee_payer", String).ok(),
         force: matches.is_present("force"),
+        stake_args: None,
     }
 }
 

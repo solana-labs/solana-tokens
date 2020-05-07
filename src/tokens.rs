@@ -108,7 +108,7 @@ fn distribute_tokens<T: Client>(
     client: &ThinClient<T>,
     db: &mut PickleDb,
     allocations: &[Allocation],
-    args: &DistributeTokensArgs<Box<dyn Signer>>,
+    args: &DistributeTokensArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<(), Error> {
     let signers = if args.dry_run {
         vec![]
@@ -339,7 +339,7 @@ fn read_allocations(
 
 pub fn process_distribute_tokens<T: Client>(
     client: &ThinClient<T>,
-    args: &DistributeTokensArgs<Box<dyn Signer>>,
+    args: &DistributeTokensArgs<Pubkey, Box<dyn Signer>>,
 ) -> Result<Option<usize>, Error> {
     let mut allocations: Vec<Allocation> =
         read_allocations(&args.input_csv, args.from_bids, args.dollars_per_sol);
@@ -617,7 +617,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         .unwrap()
         .to_string();
 
-    let args: DistributeTokensArgs<Box<dyn Signer>> = DistributeTokensArgs {
+    let args: DistributeTokensArgs<Pubkey, Box<dyn Signer>> = DistributeTokensArgs {
         sender_keypair: Some(Box::new(sender_keypair)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
@@ -627,6 +627,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         transactions_db: transactions_db.clone(),
         dollars_per_sol: None,
         force: false,
+        stake_args: None,
     };
     let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();
     assert_eq!(confirmations, None);
