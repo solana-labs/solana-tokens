@@ -3,6 +3,7 @@ use crate::thin_client::{Client, ThinClient};
 use console::style;
 use csv::{ReaderBuilder, Trim};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use pickledb::{PickleDb, PickleDbDumpPolicy};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
@@ -61,6 +62,10 @@ pub enum Error {
     TransportError(#[from] TransportError),
 }
 
+fn unique_signers(signers: Vec<&dyn Signer>) -> Vec<&dyn Signer> {
+    signers.into_iter().unique_by(|s| s.pubkey()).collect_vec()
+}
+
 fn merge_allocations(allocations: &[Allocation]) -> Vec<Allocation> {
     let mut allocation_map = IndexMap::new();
     for allocation in allocations {
@@ -117,11 +122,11 @@ fn distribute_tokens<T: Client>(
     let signers = if args.dry_run {
         vec![]
     } else {
-        let mut signers = vec![&**args.sender_keypair.as_ref().unwrap()];
-        if args.sender_keypair != args.fee_payer {
-            signers.push(&**args.fee_payer.as_ref().unwrap());
-        }
-        signers
+        let signers = vec![
+            &**args.sender_keypair.as_ref().unwrap(),
+            &**args.fee_payer.as_ref().unwrap(),
+        ];
+        unique_signers(signers)
     };
 
     for allocation in allocations {
@@ -173,12 +178,13 @@ fn distribute_stake<T: Client>(
         let signers = if args.dry_run {
             vec![]
         } else {
-            vec![
+            let signers = vec![
                 &**args.fee_payer.as_ref().unwrap(),
                 &**stake_args.stake_authority.as_ref().unwrap(),
                 &**stake_args.withdraw_authority.as_ref().unwrap(),
                 &new_stake_account_keypair,
-            ]
+            ];
+            unique_signers(signers)
         };
 
         println!("{:<44}  {:>24.9}", allocation.recipient, allocation.amount);
