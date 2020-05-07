@@ -42,7 +42,6 @@ pub struct PrintDbArgs {
 
 pub enum Command<P, K> {
     DistributeTokens(DistributeTokensArgs<P, K>),
-    DistributeStake(DistributeStakeArgs<P, K>),
     Balances(BalancesArgs),
     PrintDb(PrintDbArgs),
 }
@@ -111,11 +110,6 @@ pub fn resolve_command(
                 stake_args: resolved_stake_args.map_or(Ok(None), |r| r.map(Some))?,
             };
             Ok(Command::DistributeTokens(resolved_args))
-        }
-        Command::DistributeStake(args) => {
-            let mut wallet_manager = maybe_wallet_manager()?;
-            let resolved_args = resolve_stake_args(&mut wallet_manager, args)?;
-            Ok(Command::DistributeStake(resolved_args))
         }
         Command::Balances(args) => Ok(Command::Balances(args)),
         Command::PrintDb(args) => Ok(Command::PrintDb(args)),

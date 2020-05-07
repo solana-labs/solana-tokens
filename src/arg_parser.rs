@@ -229,8 +229,8 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
     }
 }
 
-fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeStakeArgs<String, String> {
-    DistributeStakeArgs {
+fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs<String, String> {
+    let stake_args = DistributeStakeArgs {
         input_csv: value_t_or_exit!(matches, "input_csv", String),
         transactions_db: value_t_or_exit!(matches, "transactions_db", String),
         dry_run: matches.is_present("dry_run"),
@@ -240,6 +240,18 @@ fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeStakeArgs<
         stake_authority: value_t!(matches, "stake_authority", String).ok(),
         withdraw_authority: value_t!(matches, "withdraw_authority", String).ok(),
         fee_payer: value_t!(matches, "fee_payer", String).ok(),
+    };
+    DistributeTokensArgs {
+        input_csv: value_t_or_exit!(matches, "input_csv", String),
+        from_bids: false,
+        transactions_db: value_t_or_exit!(matches, "transactions_db", String),
+        dollars_per_sol: None,
+        dry_run: matches.is_present("dry_run"),
+        no_wait: matches.is_present("no_wait"),
+        sender_keypair: None,
+        fee_payer: value_t!(matches, "fee_payer", String).ok(),
+        force: false,
+        stake_args: Some(stake_args),
     }
 }
 
@@ -272,7 +284,7 @@ where
             Command::DistributeTokens(parse_distribute_tokens_args(matches))
         }
         ("distribute-stake", Some(matches)) => {
-            Command::DistributeStake(parse_distribute_stake_args(matches))
+            Command::DistributeTokens(parse_distribute_stake_args(matches))
         }
         ("balances", Some(matches)) => Command::Balances(parse_balances_args(matches)),
         ("print-database", Some(matches)) => Command::PrintDb(parse_print_db_args(matches)),
