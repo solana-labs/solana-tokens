@@ -180,6 +180,7 @@ fn distribute_stake<T: Client>(
         } else {
             let signers = vec![
                 &**args.fee_payer.as_ref().unwrap(),
+                &**args.sender_keypair.as_ref().unwrap(),
                 &**stake_args.stake_authority.as_ref().unwrap(),
                 &**stake_args.withdraw_authority.as_ref().unwrap(),
                 &new_stake_account_keypair,
@@ -193,6 +194,7 @@ fn distribute_stake<T: Client>(
         } else {
             let system_sol = stake_args.sol_for_fees;
             let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
+            let sender_pubkey = args.sender_keypair.as_ref().unwrap().pubkey();
             let stake_authority = stake_args.stake_authority.as_ref().unwrap().pubkey();
             let withdraw_authority = stake_args.withdraw_authority.as_ref().unwrap().pubkey();
 
@@ -222,7 +224,7 @@ fn distribute_stake<T: Client>(
             ));
 
             instructions.push(system_instruction::transfer(
-                &fee_payer_pubkey, // Should this be a sender keypair?
+                &sender_pubkey,
                 &recipient,
                 sol_to_lamports(system_sol),
             ));
@@ -648,7 +650,6 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         .transfer(sol_to_lamports(1.0), &sender_keypair, &fee_payer.pubkey())
         .unwrap();
 
-    // TODO: Create a stake account with lockups
     let stake_account_keypair = Keypair::new();
     let stake_account_address = stake_account_keypair.pubkey();
     let stake_authority = Keypair::new();
@@ -704,7 +705,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         stake_args: Some(stake_args),
         force: false,
         from_bids: false,
-        sender_keypair: None,
+        sender_keypair: Some(Box::new(sender_keypair)),
         dollars_per_sol: None,
     };
     let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();

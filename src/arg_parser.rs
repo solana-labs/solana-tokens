@@ -124,6 +124,14 @@ where
                         .help("Don't wait for transaction confirmations"),
                 )
                 .arg(
+                    Arg::with_name("sender_keypair")
+                        .long("from")
+                        .takes_value(true)
+                        .value_name("SENDING_KEYPAIR")
+                        .validator(is_valid_signer)
+                        .help("Keypair to fund accounts"),
+                )
+                .arg(
                     Arg::with_name("stake_account_address")
                         .required(true)
                         .long("stake-account-address")
@@ -241,7 +249,7 @@ fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs
         dollars_per_sol: None,
         dry_run: matches.is_present("dry_run"),
         no_wait: matches.is_present("no_wait"),
-        sender_keypair: None,
+        sender_keypair: value_t!(matches, "sender_keypair", String).ok(),
         fee_payer: value_t!(matches, "fee_payer", String).ok(),
         force: false,
         stake_args: Some(stake_args),
