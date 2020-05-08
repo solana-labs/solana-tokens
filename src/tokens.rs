@@ -426,11 +426,12 @@ fn finalize_transactions<T: Client>(
     let progress_bar = new_spinner_progress_bar();
 
     while opt_confirmations.is_some() || !unconfirmed_transactions.is_empty() {
-        let confirmations = opt_confirmations.unwrap();
-        progress_bar.set_message(&format!(
-            "[{}/{}] Finalizing transactions",
-            confirmations, 32,
-        ));
+        if let Some(confirmations) = opt_confirmations {
+            progress_bar.set_message(&format!(
+                "[{}/{}] Finalizing transactions",
+                confirmations, 32,
+            ));
+        }
 
         if !dry_run {
             for transaction in unconfirmed_transactions {
