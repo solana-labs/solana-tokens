@@ -36,12 +36,19 @@ where
             SubCommand::with_name("distribute-tokens")
                 .about("Distribute tokens")
                 .arg(
-                    Arg::with_name("transactions_db")
-                        .long("transactions-db")
+                    Arg::with_name("transaction_db")
+                        .long("transaction-db")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
-                        .help("Transactions database file"),
+                        .help("Transaction database file"),
+                )
+                .arg(
+                    Arg::with_name("transaction_log")
+                        .long("transaction-log")
+                        .takes_value(true)
+                        .value_name("FILE")
+                        .help("Path to transaction log"),
                 )
                 .arg(
                     Arg::with_name("from_bids")
@@ -91,12 +98,19 @@ where
             SubCommand::with_name("distribute-stake")
                 .about("Distribute stake accounts")
                 .arg(
-                    Arg::with_name("transactions_db")
-                        .long("transactions-db")
+                    Arg::with_name("transaction_db")
+                        .long("transaction-db")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
-                        .help("Transactions database file"),
+                        .help("Transaction database file"),
+                )
+                .arg(
+                    Arg::with_name("transaction_log")
+                        .long("transaction-log")
+                        .takes_value(true)
+                        .value_name("FILE")
+                        .help("Path to transaction log"),
                 )
                 .arg(
                     Arg::with_name("input_csv")
@@ -193,8 +207,8 @@ where
             SubCommand::with_name("transaction-log")
                 .about("Print the database to a CSV file")
                 .arg(
-                    Arg::with_name("transactions_db")
-                        .long("transactions-db")
+                    Arg::with_name("transaction_db")
+                        .long("transaction-db")
                         .required(true)
                         .takes_value(true)
                         .value_name("FILE")
@@ -216,7 +230,8 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
     DistributeTokensArgs {
         input_csv: value_t_or_exit!(matches, "input_csv", String),
         from_bids: matches.is_present("from_bids"),
-        transactions_db: value_t_or_exit!(matches, "transactions_db", String),
+        transaction_db: value_t_or_exit!(matches, "transaction_db", String),
+        transaction_log: value_t!(matches, "transaction_log", String).ok(),
         dollars_per_sol: value_t!(matches, "dollars_per_sol", f64).ok(),
         dry_run: matches.is_present("dry_run"),
         sender_keypair: value_t_or_exit!(matches, "sender_keypair", String),
@@ -235,7 +250,8 @@ fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs
     DistributeTokensArgs {
         input_csv: value_t_or_exit!(matches, "input_csv", String),
         from_bids: false,
-        transactions_db: value_t_or_exit!(matches, "transactions_db", String),
+        transaction_db: value_t_or_exit!(matches, "transaction_db", String),
+        transaction_log: value_t!(matches, "transaction_log", String).ok(),
         dollars_per_sol: None,
         dry_run: matches.is_present("dry_run"),
         sender_keypair: value_t_or_exit!(matches, "sender_keypair", String),
@@ -254,7 +270,7 @@ fn parse_balances_args(matches: &ArgMatches<'_>) -> BalancesArgs {
 
 fn parse_transaction_log_args(matches: &ArgMatches<'_>) -> TransactionLogArgs {
     TransactionLogArgs {
-        transactions_db: value_t_or_exit!(matches, "transactions_db", String),
+        transaction_db: value_t_or_exit!(matches, "transaction_db", String),
         output_path: value_t_or_exit!(matches, "output_path", String),
     }
 }

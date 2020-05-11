@@ -317,7 +317,7 @@ pub fn process_distribute_tokens<T: Client>(
         );
     }
 
-    let mut db = open_db(&args.transactions_db, args.dry_run)?;
+    let mut db = open_db(&args.transaction_db, args.dry_run)?;
 
     // Start by finalizing any transactions from the previous run.
     let confirmations = finalize_transactions(client, &mut db)?;
@@ -376,7 +376,13 @@ pub fn process_distribute_tokens<T: Client>(
 
     distribute_tokens(client, &mut db, &allocations, args)?;
 
-    finalize_transactions(client, &mut db)
+    let opt_confirmations = finalize_transactions(client, &mut db)?;
+
+    if let Some(transaction_log) = &args.transaction_log {
+        write_transaction_log(&db, transaction_log)?;
+    }
+
+    Ok(opt_confirmations)
 }
 
 fn finalize_transactions<T: Client>(
@@ -533,7 +539,7 @@ pub fn process_balances<T: Client>(
 }
 
 pub fn process_transaction_log(args: &TransactionLogArgs) -> Result<(), Error> {
-    let db = open_db(&args.transactions_db, true)?;
+    let db = open_db(&args.transaction_db, true)?;
     write_transaction_log(&db, &args.output_path)?;
     Ok(())
 }
@@ -559,7 +565,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
     wtr.flush().unwrap();
 
     let dir = tempdir().unwrap();
-    let transactions_db = dir
+    let transaction_db = dir
         .path()
         .join("transactions.db")
         .to_str()
@@ -572,14 +578,15 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         dry_run: false,
         input_csv,
         from_bids: false,
-        transactions_db: transactions_db.clone(),
+        transaction_db: transaction_db.clone(),
+        transaction_log: None,
         dollars_per_sol: None,
         stake_args: None,
     };
     let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();
     assert_eq!(confirmations, None);
 
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transaction_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
@@ -595,7 +602,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transaction_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
@@ -650,7 +657,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     wtr.flush().unwrap();
 
     let dir = tempdir().unwrap();
-    let transactions_db = dir
+    let transaction_db = dir
         .path()
         .join("transactions.db")
         .to_str()
@@ -667,7 +674,8 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         fee_payer: Box::new(fee_payer),
         dry_run: false,
         input_csv,
-        transactions_db: transactions_db.clone(),
+        transaction_db: transaction_db.clone(),
+        transaction_log: None,
         stake_args: Some(stake_args),
         from_bids: false,
         sender_keypair: Box::new(sender_keypair),
@@ -676,7 +684,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();
     assert_eq!(confirmations, None);
 
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transaction_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
@@ -697,7 +705,7 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     // Now, run it again, and check there's no double-spend.
     process_distribute_tokens(&thin_client, &args).unwrap();
-    let transaction_infos = read_transaction_infos(&open_db(&transactions_db, true).unwrap());
+    let transaction_infos = read_transaction_infos(&open_db(&transaction_db, true).unwrap());
     assert_eq!(transaction_infos.len(), 1);
     assert_eq!(transaction_infos[0].recipient, alice_pubkey);
     let expected_amount = sol_to_lamports(allocation.amount);
