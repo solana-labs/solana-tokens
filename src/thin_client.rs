@@ -148,10 +148,14 @@ impl<C: Client> ThinClient<C> {
         self.client.send_and_confirm_transaction1(transaction)
     }
 
-    pub fn send_message<S: Signers>(&self, message: Message, signers: &S) -> Result<Signature> {
+    pub fn send_message<S: Signers>(&self, message: Message, signers: &S) -> Result<Transaction> {
+        if self.dry_run {
+            return Ok(Transaction::new_unsigned(message));
+        }
         let (blockhash, _fee_caluclator) = self.get_recent_blockhash()?;
         let transaction = Transaction::new(signers, message, blockhash);
-        self.send_transaction(transaction)
+        self.send_transaction(transaction.clone())?;
+        Ok(transaction)
     }
 
     pub fn transfer<S: Signer>(
@@ -159,7 +163,7 @@ impl<C: Client> ThinClient<C> {
         lamports: u64,
         sender_keypair: &S,
         to_pubkey: &Pubkey,
-    ) -> Result<Signature> {
+    ) -> Result<Transaction> {
         let create_instruction =
             system_instruction::transfer(&sender_keypair.pubkey(), &to_pubkey, lamports);
         let message = Message::new(&[create_instruction]);
