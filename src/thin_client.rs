@@ -21,10 +21,6 @@ use solana_transaction_status::TransactionStatus;
 
 pub trait Client {
     fn send_transaction1(&self, transaction: Transaction) -> Result<Signature>;
-
-    // TODO: Work to delete this
-    fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature>;
-
     fn get_signature_statuses1(
         &self,
         signatures: &[Signature],
@@ -37,12 +33,6 @@ pub trait Client {
 impl Client for RpcClient {
     fn send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
         self.send_transaction(&transaction)
-            .map_err(|e| TransportError::Custom(e.to_string()))
-    }
-
-    fn send_and_confirm_transaction1(&self, mut transaction: Transaction) -> Result<Signature> {
-        let signers: Vec<&dyn Signer> = vec![]; // Don't allow resigning
-        self.send_and_confirm_transaction_with_spinner(&mut transaction, &signers)
             .map_err(|e| TransportError::Custom(e.to_string()))
     }
 
@@ -75,12 +65,6 @@ impl Client for RpcClient {
 impl Client for BankClient {
     fn send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
         self.async_send_transaction(transaction)
-    }
-
-    fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature> {
-        let signature = self.send_transaction1(transaction)?;
-        self.poll_for_signature(&signature)?;
-        Ok(signature)
     }
 
     fn get_signature_statuses1(
@@ -132,20 +116,18 @@ impl<C: Client> ThinClient<C> {
         self.client.send_transaction1(transaction)
     }
 
+    pub fn poll_for_confirmation(&self, signature: &Signature) -> Result<()> {
+        while self.get_signature_statuses(&[*signature])?[0].is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        Ok(())
+    }
+
     pub fn get_signature_statuses(
         &self,
         signatures: &[Signature],
     ) -> Result<Vec<Option<TransactionStatus>>> {
         self.client.get_signature_statuses1(signatures)
-    }
-
-    pub fn send_and_confirm_transaction(&self, transaction: Transaction) -> Result<Signature> {
-        if self.dry_run {
-            return Ok(Signature::default());
-        }
-        // TODO: implement this in terms of ThinClient methods and then remove
-        // send_and_confirm_transaction1 from from the Client trait.
-        self.client.send_and_confirm_transaction1(transaction)
     }
 
     pub fn send_message<S: Signers>(&self, message: Message, signers: &S) -> Result<Transaction> {
