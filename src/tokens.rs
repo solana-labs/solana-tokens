@@ -617,8 +617,11 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
 pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_keypair: Keypair) {
     let thin_client = ThinClient::new(client, false);
     let fee_payer = Keypair::new();
-    thin_client
+    let transaction = thin_client
         .transfer(sol_to_lamports(1.0), &sender_keypair, &fee_payer.pubkey())
+        .unwrap();
+    thin_client
+        .poll_for_confirmation(&transaction.signatures[0])
         .unwrap();
 
     let stake_account_keypair = Keypair::new();
