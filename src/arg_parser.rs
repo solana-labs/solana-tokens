@@ -37,8 +37,8 @@ where
                 .about("Distribute tokens")
                 .arg(
                     Arg::with_name("transactions_db")
+                        .long("transactions-db")
                         .required(true)
-                        .index(1)
                         .takes_value(true)
                         .value_name("FILE")
                         .help("Transactions database file"),
@@ -95,8 +95,8 @@ where
                 .about("Distribute stake accounts")
                 .arg(
                     Arg::with_name("transactions_db")
+                        .long("transactions-db")
                         .required(true)
-                        .index(1)
                         .takes_value(true)
                         .value_name("FILE")
                         .help("Transactions database file"),
@@ -193,8 +193,8 @@ where
                 .about("Print the database to a CSV file")
                 .arg(
                     Arg::with_name("transactions_db")
+                        .long("transactions-db")
                         .required(true)
-                        .index(1)
                         .takes_value(true)
                         .value_name("FILE")
                         .help("Transactions database file"),
