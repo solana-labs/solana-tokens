@@ -10,16 +10,16 @@ pub struct DistributeTokensArgs<P, K> {
     pub transactions_db: String,
     pub dollars_per_sol: Option<f64>,
     pub dry_run: bool,
-    pub sender_keypair: Option<K>,
-    pub fee_payer: Option<K>,
+    pub sender_keypair: K,
+    pub fee_payer: K,
     pub stake_args: Option<StakeArgs<P, K>>,
 }
 
 pub struct StakeArgs<P, K> {
     pub sol_for_fees: f64,
     pub stake_account_address: P,
-    pub stake_authority: Option<K>,
-    pub withdraw_authority: Option<K>,
+    pub stake_authority: K,
+    pub withdraw_authority: K,
 }
 
 pub struct BalancesArgs {
@@ -59,12 +59,20 @@ pub fn resolve_stake_args(
         )
         .unwrap(),
         sol_for_fees: args.sol_for_fees,
-        stake_authority: args.stake_authority.as_ref().map(|key_url| {
-            signer_from_path(&matches, &key_url, "stake authority", wallet_manager).unwrap()
-        }),
-        withdraw_authority: args.withdraw_authority.as_ref().map(|key_url| {
-            signer_from_path(&matches, &key_url, "withdraw authority", wallet_manager).unwrap()
-        }),
+        stake_authority: signer_from_path(
+            &matches,
+            &args.stake_authority,
+            "stake authority",
+            wallet_manager,
+        )
+        .unwrap(),
+        withdraw_authority: signer_from_path(
+            &matches,
+            &args.withdraw_authority,
+            "withdraw authority",
+            wallet_manager,
+        )
+        .unwrap(),
     };
     Ok(resolved_args)
 }
@@ -85,12 +93,20 @@ pub fn resolve_command(
                 transactions_db: args.transactions_db,
                 dollars_per_sol: args.dollars_per_sol,
                 dry_run: args.dry_run,
-                sender_keypair: args.sender_keypair.as_ref().map(|key_url| {
-                    signer_from_path(&matches, &key_url, "sender", &mut wallet_manager).unwrap()
-                }),
-                fee_payer: args.fee_payer.as_ref().map(|key_url| {
-                    signer_from_path(&matches, &key_url, "fee-payer", &mut wallet_manager).unwrap()
-                }),
+                sender_keypair: signer_from_path(
+                    &matches,
+                    &args.sender_keypair,
+                    "sender",
+                    &mut wallet_manager,
+                )
+                .unwrap(),
+                fee_payer: signer_from_path(
+                    &matches,
+                    &args.fee_payer,
+                    "fee-payer",
+                    &mut wallet_manager,
+                )
+                .unwrap(),
                 stake_args: resolved_stake_args.map_or(Ok(None), |r| r.map(Some))?,
             };
             Ok(Command::DistributeTokens(resolved_args))

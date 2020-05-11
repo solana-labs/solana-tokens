@@ -138,13 +138,10 @@ fn distribute_tokens<T: Client>(
         let new_stake_account_keypair = Keypair::new();
         let new_stake_account_address = new_stake_account_keypair.pubkey();
 
-        let mut signers = vec![
-            &**args.fee_payer.as_ref().unwrap(),
-            &**args.sender_keypair.as_ref().unwrap(),
-        ];
+        let mut signers = vec![&*args.fee_payer, &*args.sender_keypair];
         if let Some(stake_args) = &args.stake_args {
-            signers.push(&**stake_args.stake_authority.as_ref().unwrap());
-            signers.push(&**stake_args.withdraw_authority.as_ref().unwrap());
+            signers.push(&*stake_args.stake_authority);
+            signers.push(&*stake_args.withdraw_authority);
             signers.push(&new_stake_account_keypair);
         }
         let signers = unique_signers(signers);
@@ -152,9 +149,9 @@ fn distribute_tokens<T: Client>(
         println!("{:<44}  {:>24.9}", allocation.recipient, allocation.amount);
         let instructions = if let Some(stake_args) = &args.stake_args {
             let sol_for_fees = stake_args.sol_for_fees;
-            let sender_pubkey = args.sender_keypair.as_ref().unwrap().pubkey();
-            let stake_authority = stake_args.stake_authority.as_ref().unwrap().pubkey();
-            let withdraw_authority = stake_args.withdraw_authority.as_ref().unwrap().pubkey();
+            let sender_pubkey = args.sender_keypair.pubkey();
+            let stake_authority = stake_args.stake_authority.pubkey();
+            let withdraw_authority = stake_args.withdraw_authority.pubkey();
 
             let mut instructions = stake_instruction::split(
                 &stake_args.stake_account_address,
@@ -189,14 +186,14 @@ fn distribute_tokens<T: Client>(
 
             instructions
         } else {
-            let from = args.sender_keypair.as_ref().unwrap().pubkey();
+            let from = args.sender_keypair.pubkey();
             let to = allocation.recipient.parse().unwrap();
             let lamports = sol_to_lamports(allocation.amount);
             let instruction = system_instruction::transfer(&from, &to, lamports);
             vec![instruction]
         };
 
-        let fee_payer_pubkey = args.fee_payer.as_ref().unwrap().pubkey();
+        let fee_payer_pubkey = args.fee_payer.pubkey();
         let message = Message::new_with_payer(&instructions, Some(&fee_payer_pubkey));
         match client.send_message(message, &signers) {
             Ok(transaction) => {
@@ -570,8 +567,8 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         .to_string();
 
     let args: DistributeTokensArgs<Pubkey, Box<dyn Signer>> = DistributeTokensArgs {
-        sender_keypair: Some(Box::new(sender_keypair)),
-        fee_payer: Some(Box::new(fee_payer)),
+        sender_keypair: Box::new(sender_keypair),
+        fee_payer: Box::new(fee_payer),
         dry_run: false,
         input_csv,
         from_bids: false,
@@ -662,18 +659,18 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
 
     let stake_args: StakeArgs<Pubkey, Box<dyn Signer>> = StakeArgs {
         stake_account_address,
-        stake_authority: Some(Box::new(stake_authority)),
-        withdraw_authority: Some(Box::new(withdraw_authority)),
+        stake_authority: Box::new(stake_authority),
+        withdraw_authority: Box::new(withdraw_authority),
         sol_for_fees: 1.0,
     };
     let args: DistributeTokensArgs<Pubkey, Box<dyn Signer>> = DistributeTokensArgs {
-        fee_payer: Some(Box::new(fee_payer)),
+        fee_payer: Box::new(fee_payer),
         dry_run: false,
         input_csv,
         transactions_db: transactions_db.clone(),
         stake_args: Some(stake_args),
         from_bids: false,
-        sender_keypair: Some(Box::new(sender_keypair)),
+        sender_keypair: Box::new(sender_keypair),
         dollars_per_sol: None,
     };
     let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();
