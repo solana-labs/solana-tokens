@@ -21,7 +21,7 @@ use solana_stake_program::{
     stake_state::{Authorized, Lockup, StakeAuthorize},
 };
 use solana_transaction_status::TransactionStatus;
-use std::{cmp, io, path::Path, process, thread::sleep, time::Duration};
+use std::{cmp, io, path::Path, thread::sleep, time::Duration};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Bid {
@@ -340,27 +340,6 @@ pub fn process_distribute_tokens<T: Client>(
         return Ok(confirmations);
     }
 
-    // Sanity check: the recipient should not have tokens yet. If they do, it
-    // is probably because:
-    //  1. The signature couldn't be found in a previous run, though the transaction was
-    //     successful. If so, manually add a row to the transaction log.
-    //  2. The recipient already has tokens. If so, update this code to include a `--force` flag.
-    //  3. The recipient correctly got tokens in a previous run, and then later registered the same
-    //     address for another bid. If so, update this code to check for that case.
-    for allocation in &allocations {
-        let address = allocation.recipient.parse().unwrap();
-        let balance = client.get_balance(&address).unwrap();
-        if args.stake_args.is_none() && !args.force && balance != 0 {
-            eprintln!(
-                "Error: Non-zero balance {}, refusing to send {} to {}",
-                lamports_to_sol(balance),
-                allocation.amount,
-                allocation.recipient,
-            );
-            process::exit(1);
-        }
-    }
-
     println!(
         "{}",
         style(format!(
@@ -604,7 +583,6 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         from_bids: false,
         transactions_db: transactions_db.clone(),
         dollars_per_sol: None,
-        force: false,
         stake_args: None,
     };
     let confirmations = process_distribute_tokens(&thin_client, &args).unwrap();
@@ -700,7 +678,6 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         input_csv,
         transactions_db: transactions_db.clone(),
         stake_args: Some(stake_args),
-        force: false,
         from_bids: false,
         sender_keypair: Some(Box::new(sender_keypair)),
         dollars_per_sol: None,

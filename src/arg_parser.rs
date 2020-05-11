@@ -84,11 +84,6 @@ where
                         .validator(is_valid_signer)
                         .help("Fee payer"),
                 )
-                .arg(
-                    Arg::with_name("force")
-                        .long("force")
-                        .help("Do not block transfers is recipients have a non-zero balance"),
-                ),
         )
         .subcommand(
             SubCommand::with_name("distribute-stake")
@@ -220,7 +215,6 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
         dry_run: matches.is_present("dry_run"),
         sender_keypair: value_t!(matches, "sender_keypair", String).ok(),
         fee_payer: value_t!(matches, "fee_payer", String).ok(),
-        force: matches.is_present("force"),
         stake_args: None,
     }
 }
@@ -240,7 +234,6 @@ fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs
         dry_run: matches.is_present("dry_run"),
         sender_keypair: value_t!(matches, "sender_keypair", String).ok(),
         fee_payer: value_t!(matches, "fee_payer", String).ok(),
-        force: false,
         stake_args: Some(stake_args),
     }
 }
