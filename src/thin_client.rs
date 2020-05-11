@@ -115,28 +115,37 @@ impl Client for BankClient {
     }
 }
 
-pub struct ThinClient<C: Client>(C);
+pub struct ThinClient<C: Client> {
+    client: C,
+    dry_run: bool,
+}
 
 impl<C: Client> ThinClient<C> {
-    pub fn new(client: C) -> Self {
-        Self(client)
+    pub fn new(client: C, dry_run: bool) -> Self {
+        Self { client, dry_run }
     }
 
     pub fn send_transaction(&self, transaction: Transaction) -> Result<Signature> {
-        self.0.send_transaction1(transaction)
+        if self.dry_run {
+            return Ok(Signature::default());
+        }
+        self.client.send_transaction1(transaction)
     }
 
     pub fn get_signature_statuses(
         &self,
         signatures: &[Signature],
     ) -> Result<Vec<Option<TransactionStatus>>> {
-        self.0.get_signature_statuses1(signatures)
+        self.client.get_signature_statuses1(signatures)
     }
 
     pub fn send_and_confirm_transaction(&self, transaction: Transaction) -> Result<Signature> {
+        if self.dry_run {
+            return Ok(Signature::default());
+        }
         // TODO: implement this in terms of ThinClient methods and then remove
         // send_and_confirm_transaction1 from from the Client trait.
-        self.0.send_and_confirm_transaction1(transaction)
+        self.client.send_and_confirm_transaction1(transaction)
     }
 
     pub fn send_message<S: Signers>(&self, message: Message, signers: &S) -> Result<Signature> {
@@ -158,15 +167,15 @@ impl<C: Client> ThinClient<C> {
     }
 
     pub fn get_recent_blockhash(&self) -> Result<(Hash, FeeCalculator)> {
-        self.0.get_recent_blockhash1()
+        self.client.get_recent_blockhash1()
     }
 
     pub fn get_balance(&self, pubkey: &Pubkey) -> Result<u64> {
-        self.0.get_balance1(pubkey)
+        self.client.get_balance1(pubkey)
     }
 
     pub fn get_account(&self, pubkey: &Pubkey) -> Result<Option<Account>> {
-        self.0.get_account1(pubkey)
+        self.client.get_account1(pubkey)
     }
 
     pub fn get_recent_blockhashes(&self) -> Result<Vec<Hash>> {

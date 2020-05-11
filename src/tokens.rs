@@ -550,7 +550,7 @@ pub fn process_transaction_log(args: &TransactionLogArgs) -> Result<(), Error> {
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 use tempfile::{tempdir, NamedTempFile};
 pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_keypair: Keypair) {
-    let thin_client = ThinClient::new(client);
+    let thin_client = ThinClient::new(client, false);
     let fee_payer = Keypair::new();
     thin_client
         .transfer(sol_to_lamports(1.0), &sender_keypair, &fee_payer.pubkey())
@@ -620,7 +620,7 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
 }
 
 pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_keypair: Keypair) {
-    let thin_client = ThinClient::new(client);
+    let thin_client = ThinClient::new(client, false);
     let fee_payer = Keypair::new();
     thin_client
         .transfer(sol_to_lamports(1.0), &sender_keypair, &fee_payer.pubkey())
