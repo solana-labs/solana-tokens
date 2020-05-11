@@ -377,11 +377,6 @@ pub fn process_distribute_tokens<T: Client>(
     distribute_tokens(client, &mut db, &allocations, args)?;
 
     let opt_confirmations = finalize_transactions(client, &mut db)?;
-
-    if let Some(transaction_log) = &args.transaction_log {
-        write_transaction_log(&db, transaction_log)?;
-    }
-
     Ok(opt_confirmations)
 }
 
@@ -579,7 +574,6 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         input_csv,
         from_bids: false,
         transaction_db: transaction_db.clone(),
-        transaction_log: None,
         dollars_per_sol: None,
         stake_args: None,
     };
@@ -675,7 +669,6 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
         dry_run: false,
         input_csv,
         transaction_db: transaction_db.clone(),
-        transaction_log: None,
         stake_args: Some(stake_args),
         from_bids: false,
         sender_keypair: Box::new(sender_keypair),

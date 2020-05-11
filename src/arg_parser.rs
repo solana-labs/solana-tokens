@@ -44,13 +44,6 @@ where
                         .help("Transaction database file"),
                 )
                 .arg(
-                    Arg::with_name("transaction_log")
-                        .long("transaction-log")
-                        .takes_value(true)
-                        .value_name("FILE")
-                        .help("Path to transaction log"),
-                )
-                .arg(
                     Arg::with_name("from_bids")
                         .long("from-bids")
                         .help("Input CSV contains bids in dollars, not allocations in SOL"),
@@ -104,13 +97,6 @@ where
                         .takes_value(true)
                         .value_name("FILE")
                         .help("Transaction database file"),
-                )
-                .arg(
-                    Arg::with_name("transaction_log")
-                        .long("transaction-log")
-                        .takes_value(true)
-                        .value_name("FILE")
-                        .help("Path to transaction log"),
                 )
                 .arg(
                     Arg::with_name("input_csv")
@@ -231,7 +217,6 @@ fn parse_distribute_tokens_args(matches: &ArgMatches<'_>) -> DistributeTokensArg
         input_csv: value_t_or_exit!(matches, "input_csv", String),
         from_bids: matches.is_present("from_bids"),
         transaction_db: value_t_or_exit!(matches, "transaction_db", String),
-        transaction_log: value_t!(matches, "transaction_log", String).ok(),
         dollars_per_sol: value_t!(matches, "dollars_per_sol", f64).ok(),
         dry_run: matches.is_present("dry_run"),
         sender_keypair: value_t_or_exit!(matches, "sender_keypair", String),
@@ -251,7 +236,6 @@ fn parse_distribute_stake_args(matches: &ArgMatches<'_>) -> DistributeTokensArgs
         input_csv: value_t_or_exit!(matches, "input_csv", String),
         from_bids: false,
         transaction_db: value_t_or_exit!(matches, "transaction_db", String),
-        transaction_log: value_t!(matches, "transaction_log", String).ok(),
         dollars_per_sol: None,
         dry_run: matches.is_present("dry_run"),
         sender_keypair: value_t_or_exit!(matches, "sender_keypair", String),

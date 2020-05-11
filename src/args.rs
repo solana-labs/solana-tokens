@@ -8,7 +8,6 @@ pub struct DistributeTokensArgs<P, K> {
     pub input_csv: String,
     pub from_bids: bool,
     pub transaction_db: String,
-    pub transaction_log: Option<String>,
     pub dollars_per_sol: Option<f64>,
     pub dry_run: bool,
     pub sender_keypair: K,
@@ -92,7 +91,6 @@ pub fn resolve_command(
                 input_csv: args.input_csv,
                 from_bids: args.from_bids,
                 transaction_db: args.transaction_db,
-                transaction_log: args.transaction_log,
                 dollars_per_sol: args.dollars_per_sol,
                 dry_run: args.dry_run,
                 sender_keypair: signer_from_path(
