@@ -20,7 +20,7 @@ use solana_sdk::{
 use solana_transaction_status::TransactionStatus;
 
 pub trait Client {
-    fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature>;
+    fn send_transaction1(&self, transaction: Transaction) -> Result<Signature>;
 
     // TODO: Work to delete this
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature>;
@@ -35,7 +35,7 @@ pub trait Client {
 }
 
 impl Client for RpcClient {
-    fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
+    fn send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
         self.send_transaction(&transaction)
             .map_err(|e| TransportError::Custom(e.to_string()))
     }
@@ -73,12 +73,12 @@ impl Client for RpcClient {
 }
 
 impl Client for BankClient {
-    fn async_send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
+    fn send_transaction1(&self, transaction: Transaction) -> Result<Signature> {
         self.async_send_transaction(transaction)
     }
 
     fn send_and_confirm_transaction1(&self, transaction: Transaction) -> Result<Signature> {
-        let signature = self.async_send_transaction1(transaction)?;
+        let signature = self.send_transaction1(transaction)?;
         self.poll_for_signature(&signature)?;
         Ok(signature)
     }
@@ -122,8 +122,8 @@ impl<C: Client> ThinClient<C> {
         Self(client)
     }
 
-    pub fn async_send_transaction(&self, transaction: Transaction) -> Result<Signature> {
-        self.0.async_send_transaction1(transaction)
+    pub fn send_transaction(&self, transaction: Transaction) -> Result<Signature> {
+        self.0.send_transaction1(transaction)
     }
 
     pub fn get_signature_statuses(
@@ -133,7 +133,7 @@ impl<C: Client> ThinClient<C> {
         self.0.get_signature_statuses1(signatures)
     }
 
-    pub fn send_transaction(&self, transaction: Transaction) -> Result<Signature> {
+    pub fn send_and_confirm_transaction(&self, transaction: Transaction) -> Result<Signature> {
         // TODO: implement this in terms of ThinClient methods and then remove
         // send_and_confirm_transaction1 from from the Client trait.
         self.0.send_and_confirm_transaction1(transaction)

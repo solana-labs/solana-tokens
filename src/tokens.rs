@@ -214,7 +214,7 @@ fn distribute_tokens<T: Client>(
                 false,
             )?;
 
-            client.async_send_transaction(transaction)
+            client.send_transaction(transaction)
         };
         if let Err(e) = result {
             eprintln!("Error sending tokens to {}: {}", allocation.recipient, e);
@@ -330,7 +330,7 @@ pub fn process_distribute_tokens<T: Client>(
     let mut db = open_db(&args.transactions_db, args.dry_run)?;
 
     // Start by finalizing any transactions from the previous run.
-    let confirmations = finalize_transactions(client, &mut db, args.dry_run, args.no_wait)?;
+    let confirmations = finalize_transactions(client, &mut db)?;
 
     let transaction_infos = read_transaction_infos(&db);
     apply_previous_transactions(&mut allocations, &transaction_infos);
@@ -407,25 +407,18 @@ pub fn process_distribute_tokens<T: Client>(
 
     distribute_tokens(client, &mut db, &allocations, args)?;
 
-    finalize_transactions(client, &mut db, args.dry_run, args.no_wait)
+    finalize_transactions(client, &mut db)
 }
 
 fn finalize_transactions<T: Client>(
     client: &ThinClient<T>,
     db: &mut PickleDb,
-    dry_run: bool,
-    no_wait: bool,
 ) -> Result<Option<usize>, Error> {
-    let (mut opt_confirmations, mut unconfirmed_transactions) =
-        update_finalized_transactions(client, db)?;
-
-    if no_wait {
-        return Ok(opt_confirmations);
-    }
+    let mut opt_confirmations = update_finalized_transactions(client, db)?;
 
     let progress_bar = new_spinner_progress_bar();
 
-    while opt_confirmations.is_some() || !unconfirmed_transactions.is_empty() {
+    while opt_confirmations.is_some() {
         if let Some(confirmations) = opt_confirmations {
             progress_bar.set_message(&format!(
                 "[{}/{}] Finalizing transactions",
@@ -433,17 +426,10 @@ fn finalize_transactions<T: Client>(
             ));
         }
 
-        if !dry_run {
-            for transaction in unconfirmed_transactions {
-                client.async_send_transaction(transaction)?;
-            }
-        }
-
         // Sleep for about 1 slot
         sleep(Duration::from_millis(500));
-        let (opt_conf, unconfirmed) = update_finalized_transactions(client, db)?;
+        let opt_conf = update_finalized_transactions(client, db)?;
         opt_confirmations = opt_conf;
-        unconfirmed_transactions = unconfirmed;
     }
 
     Ok(opt_confirmations)
@@ -467,8 +453,8 @@ fn update_finalized_transaction(
             return Ok(None);
         }
 
-        // Return an error to signal the option resend the transaction.
-        return Err(Error::SignatureNotFound);
+        // Return zero to signal the transaction may still be in flight.
+        return Ok(Some(0));
     }
     let transaction_status = opt_transaction_status.unwrap();
 
@@ -498,11 +484,10 @@ fn update_finalized_transaction(
 
 // Update the finalized bit on any transactions that are now rooted
 // Return the lowest number of confirmations on the unfinalized transactions or None if all are finalized.
-// Also return the unconfirmed transactions with valid blockhashes.
 fn update_finalized_transactions<T: Client>(
     client: &ThinClient<T>,
     db: &mut PickleDb,
-) -> Result<(Option<usize>, Vec<Transaction>), Error> {
+) -> Result<Option<usize>, Error> {
     let transaction_infos = read_transaction_infos(db);
     let unconfirmed_transactions: Vec<_> = transaction_infos
         .iter()
@@ -522,7 +507,6 @@ fn update_finalized_transactions<T: Client>(
     let recent_blockhashes = client.get_recent_blockhashes()?;
 
     let mut confirmations = None;
-    let mut mia_transactions = vec![];
     for (transaction, opt_transaction_status) in unconfirmed_transactions
         .into_iter()
         .zip(transaction_statuses.into_iter())
@@ -537,15 +521,12 @@ fn update_finalized_transactions<T: Client>(
             Ok(Some(confs)) => {
                 confirmations = Some(cmp::min(confs, confirmations.unwrap_or(usize::MAX)));
             }
-            Err(Error::SignatureNotFound) => {
-                mia_transactions.push(transaction.clone());
-            }
             result => {
                 result?;
             }
         }
     }
-    Ok((confirmations, mia_transactions))
+    Ok(confirmations)
 }
 
 pub fn process_balances<T: Client>(
@@ -619,7 +600,6 @@ pub fn test_process_distribute_tokens_with_client<C: Client>(client: C, sender_k
         sender_keypair: Some(Box::new(sender_keypair)),
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
-        no_wait: false,
         input_csv,
         from_bids: false,
         transactions_db: transactions_db.clone(),
@@ -717,7 +697,6 @@ pub fn test_process_distribute_stake_with_client<C: Client>(client: C, sender_ke
     let args: DistributeTokensArgs<Pubkey, Box<dyn Signer>> = DistributeTokensArgs {
         fee_payer: Some(Box::new(fee_payer)),
         dry_run: false,
-        no_wait: false,
         input_csv,
         transactions_db: transactions_db.clone(),
         stake_args: Some(stake_args),
@@ -870,8 +849,8 @@ mod tests {
         db.set(&signature.to_string(), &transaction_info).unwrap();
         assert!(matches!(
             update_finalized_transaction(&mut db, &signature, None, &blockhash, &[blockhash])
-                .unwrap_err(),
-            Error::SignatureNotFound
+                .unwrap(),
+            Some(0)
         ));
 
         // Unchanged

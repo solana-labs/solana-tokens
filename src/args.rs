@@ -10,7 +10,6 @@ pub struct DistributeTokensArgs<P, K> {
     pub transactions_db: String,
     pub dollars_per_sol: Option<f64>,
     pub dry_run: bool,
-    pub no_wait: bool,
     pub sender_keypair: Option<K>,
     pub fee_payer: Option<K>,
     pub force: bool,
@@ -87,7 +86,6 @@ pub fn resolve_command(
                 transactions_db: args.transactions_db,
                 dollars_per_sol: args.dollars_per_sol,
                 dry_run: args.dry_run,
-                no_wait: args.no_wait,
                 sender_keypair: args.sender_keypair.as_ref().map(|key_url| {
                     signer_from_path(&matches, &key_url, "sender", &mut wallet_manager).unwrap()
                 }),
